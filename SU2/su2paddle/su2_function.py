@@ -3,19 +3,19 @@ import sys
 from typing import Tuple
 
 import os
-import torch
-from torch.nn.utils.rnn import pad_sequence
+import paddle
+from common import pad_sequence
 
 import SU2
 from mpi4py import MPI  # Must be imported before pysu2 or else MPI error happens at some point
-import pysu2
+import SU2.pysu2 as pysu2
 
-from su2torch.su2_function_mpi import RunCode, non_busy_post, non_busy_wait, modify_config
+from su2_function_mpi import RunCode, non_busy_post, non_busy_wait, modify_config
 
 _global_max_ppe = -1
 
 
-class SU2Module(torch.nn.Module):
+class SU2Module(paddle.nn.Layer):
     def __init__(self, config_file: str, mesh_file: str, dims: int = 2, num_zones: int = 1) -> None:
         """ Initialize the SU2 configurations for the provided config file.
 
@@ -40,7 +40,7 @@ class SU2Module(torch.nn.Module):
         self.forward_config = config_file
         self.forward_driver = None
 
-    def forward(self, *inputs: torch.Tensor) -> Tuple[torch.Tensor, ...]:
+    def forward(self, *inputs: paddle.Tensor) -> Tuple[paddle.Tensor, ...]:
         return SU2Function.apply(*inputs, self.forward_config, self.mesh_file,
                                  self.num_zones, self.dims, self.set_forward_driver)
 
@@ -60,7 +60,7 @@ class SU2Module(torch.nn.Module):
             self.forward_driver.Postprocessing()
 
 
-class SU2Function(torch.autograd.Function):
+class SU2Function(paddle.autograd.PyLayer):
     num_params = 5
 
     @staticmethod

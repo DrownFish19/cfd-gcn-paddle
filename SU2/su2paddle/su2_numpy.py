@@ -3,8 +3,8 @@ import math
 import numpy as np
 from mpi4py import MPI  # Must be imported before pysu2 or else MPI error happens at some point
 
-import pysu2
-from su2torch.su2_function_mpi import RunCode
+import SU2.pysu2 as pysu2
+from su2_function_mpi import RunCode
 
 
 # TODO Outdated, update to match the Torch version (su2_function.py)

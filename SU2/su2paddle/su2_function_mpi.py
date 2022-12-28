@@ -3,16 +3,17 @@ import time
 import shutil
 from enum import IntEnum
 
-import torch
+import paddle
 import numpy as np
 from mpi4py import MPI
 
 import SU2
-import pysu2
-import pysu2ad
+import SU2.pysu2 as pysu2
+import SU2.pysu2ad as pysu2ad
 
 from typing import Sequence, Union, Tuple, Dict, TypeVar
-GenTensor = TypeVar('GenTensor', torch.Tensor, np.ndarray)
+
+GenTensor = TypeVar('GenTensor', paddle.Tensor, np.ndarray)
 
 
 _non_busy_wait_max_time = 0.1
@@ -167,8 +168,8 @@ def activate_su2_mpi(remove_temp_files: bool = True, max_procs_per_example: int 
     import atexit
     atexit.register(stop)
 
-    import su2torch.su2_function
-    su2torch.su2_function._global_max_ppe = max_procs_per_example
+    import su2_function
+    su2_function._global_max_ppe = max_procs_per_example
 
 
 def non_busy_wait(comm: MPI.Intracomm) -> None:
