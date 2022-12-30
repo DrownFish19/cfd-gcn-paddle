@@ -1,11 +1,16 @@
-from typing import List
-from typing import Tuple
+import warnings
+from typing import Union, Optional, List, Tuple
 
+import math
+import matplotlib.pyplot as plt
 import paddle
 
+plt.switch_backend('agg')
+
+
 def pad_sequence(sequences: List[paddle.Tensor],
-                 batch_first: bool=False,
-                 padding_value: float=0.0) -> paddle.Tensor:
+                 batch_first: bool = False,
+                 padding_value: float = 0.0) -> paddle.Tensor:
     r"""Pad a list of variable length Tensors with ``padding_value``
     ``pad_sequence`` stacks a list of Tensors along a new dimension,
     and pads them to equal length. For example, if the input is list of
@@ -16,7 +21,6 @@ def pad_sequence(sequences: List[paddle.Tensor],
     `L` is length of the sequence.
     `*` is any number of trailing dimensions, including none.
     Example:
-        >>> from paddle.nn.utils.rnn import pad_sequence
         >>> a = paddle.ones(25, 300)
         >>> b = paddle.ones(22, 300)
         >>> c = paddle.ones(15, 300)
@@ -70,3 +74,72 @@ def pad_sequence(sequences: List[paddle.Tensor],
                 out_tensor[length, i] = tensor
 
     return out_tensor
+
+
+@paddle.no_grad()
+def make_grid(tensor: Union[paddle.Tensor, List[paddle.Tensor]], nrow: int = 8, padding: int = 2,
+              normalize: bool = False,
+              value_range: Optional[Tuple[int, int]] = None, scale_each: bool = False, pad_value: int = 0,
+              **kwargs) -> paddle.Tensor:
+    if not (isinstance(tensor, paddle.Tensor) or (
+            isinstance(tensor, list) and all(isinstance(t, paddle.Tensor) for t in tensor))):
+        raise TypeError(f'tensor or list of tensors expected, got {type(tensor)}')
+
+    if "range" in kwargs.keys():
+        warning = "range will be deprecated, please use value_range instead."
+        warnings.warn(warning)
+        value_range = kwargs["range"]
+
+    # if list of tensors, convert to a 4D mini-batch Tensor
+    if isinstance(tensor, list):
+        tensor = paddle.stack(tensor, axis=0)
+
+    if tensor.dim() == 2:  # single image H x W
+        tensor = tensor.unsqueeze(0)
+    if tensor.dim() == 3:  # single image
+        if tensor.shape[0] == 1:  # if single-channel, convert to 3-channel
+            tensor = paddle.concat((tensor, tensor, tensor), 0)
+        tensor = tensor.unsqueeze(0)
+    if tensor.dim() == 4 and tensor.shape[1] == 1:  # single-channel images
+        tensor = paddle.concat((tensor, tensor, tensor), 1)
+
+    if normalize is True:
+        if value_range is not None:
+            assert isinstance(value_range,
+                              tuple), "value_range has to be a tuple (min, max) if specified. min and max are numbers"
+
+        def norm_ip(img, low, high):
+            img.clip(min=low, max=high)
+            img = img - low
+            img = img / max(high - low, 1e-5)
+
+        def norm_range(t, value_range):
+            if value_range is not None:
+                norm_ip(t, value_range[0], value_range[1])
+            else:
+                norm_ip(t, float(t.min()), float(t.max()))
+
+        if scale_each is True:
+            for t in tensor:  # loop over mini-batch dimension
+                norm_range(t, value_range)
+        else:
+            norm_range(tensor, value_range)
+
+    if tensor.shape[0] == 1:
+        return tensor.squeeze(0)
+
+    # make the mini-batch of images into a grid
+    nmaps = tensor.shape[0]
+    xmaps = min(nrow, nmaps)
+    ymaps = int(math.ceil(float(nmaps) / xmaps))
+    height, width = int(tensor.shape[2] + padding), int(tensor.shape[3] + padding)
+    num_channels = tensor.shape[1]
+    grid = paddle.full((num_channels, height * ymaps + padding, width * xmaps + padding), pad_value)
+    k = 0
+    for y in range(ymaps):
+        for x in range(xmaps):
+            if k >= nmaps:
+                break
+            grid[:, y * height + padding:(y + 1) * height, x * width + padding:(x + 1) * width] = tensor[k]
+            k = k + 1
+    return grid

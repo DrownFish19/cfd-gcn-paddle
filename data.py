@@ -4,15 +4,16 @@ from pathlib import Path
 
 import numpy as np
 
-import torch
-from torch._six import container_abcs, string_classes, int_classes
-from torch_geometric.data import Data, Batch, Dataset
+import paddle
+from paddle.io import Dataset, DataLoader
 
 from mesh_utils import get_mesh_graph
 
 
 class MeshAirfoilDataset(Dataset):
     def __init__(self, root, mode='train'):
+        super().__init__()
+
         self.mode = mode
         self.data_dir = Path(root) / ('outputs_' + mode)
         self.file_list = os.listdir(self.data_dir)
@@ -25,49 +26,47 @@ class MeshAirfoilDataset(Dataset):
         with open(self.data_dir.parent / 'train_max_min.pkl', 'rb') as f:
             self.normalization_factors = pickle.load(f)
 
-        self.nodes = torch.from_numpy(self.mesh_graph[0])
-        self.edges = torch.from_numpy(self.mesh_graph[1])
+        self.nodes = paddle.to_tensor(self.mesh_graph[0])
+        self.edges = paddle.to_tensor(self.mesh_graph[1])
         self.elems_list = self.mesh_graph[2]
         self.marker_dict = self.mesh_graph[3]
-        self.node_markers = self.nodes.new_full((self.nodes.shape[0], 1), fill_value=-1)
+        self.node_markers = paddle.full([self.nodes.shape[0], 1], fill_value=-1)
         for i, (marker_tag, marker_elems) in enumerate(self.marker_dict.items()):
             for elem in marker_elems:
                 self.node_markers[elem[0]] = i
                 self.node_markers[elem[1]] = i
 
-        super().__init__(root)
-
     def __len__(self):
         return self.len
 
-    def get(self, idx):
+    def __getitem__(self, idx):
         with open(self.data_dir / self.file_list[idx], 'rb') as f:
             fields = pickle.load(f)
         fields = self.preprocess(fields)
 
         aoa, reynolds, mach = self.get_params_from_name(self.file_list[idx])
         aoa = aoa
-        aoa = torch.from_numpy(aoa)
+        aoa = paddle.to_tensor(aoa)
         mach_or_reynolds = mach if reynolds is None else reynolds
-        mach_or_reynolds = torch.from_numpy(mach_or_reynolds)
+        mach_or_reynolds = paddle.to_tensor(mach_or_reynolds)
 
         norm_aoa = aoa / 10
         norm_mach_or_reynolds = mach_or_reynolds if reynolds is None else (mach_or_reynolds - 1.5e6) / 1.5e6
 
         # add physics parameters to graph
-        nodes = torch.cat([
+        nodes = paddle.concat([
             self.nodes,
-            norm_aoa.unsqueeze(0).repeat(self.nodes.shape[0], 1),
-            norm_mach_or_reynolds.unsqueeze(0).repeat(self.nodes.shape[0], 1),
+            paddle.repeat_interleave(x=norm_aoa, repeats=self.nodes.shape[0]).unsqueeze(-1),
+            paddle.repeat_interleave(x=norm_mach_or_reynolds, repeats=self.nodes.shape[0]).unsqueeze(-1),
             self.node_markers
-        ], dim=-1)
+        ], axis=-1)
 
-        data = Data(x=nodes, y=fields, edge_index=self.edges)
-        data.aoa = aoa
-        data.norm_aoa = norm_aoa
-        data.mach_or_reynolds = mach_or_reynolds
-        data.norm_mach_or_reynolds = norm_mach_or_reynolds
-        return data
+        # data = MeshGraphData(x=nodes, y=fields, edge_index=self.edges, aoa=aoa, norm_aoa=norm_aoa,
+        #                      mach_or_reynolds=mach_or_reynolds, norm_mach_or_reynolds=norm_mach_or_reynolds)
+        return {'x': nodes, 'y': fields, 'edge_index': self.edges,
+                'aoa': aoa, 'norm_aoa': norm_aoa, 'mach_or_reynolds': mach_or_reynolds,
+                'norm_mach_or_reynolds': norm_mach_or_reynolds,
+                }
 
     def preprocess(self, tensor_list, stack_output=True):
         # data_means, data_stds = self.normalization_factors
@@ -77,10 +76,10 @@ class MeshAirfoilDataset(Dataset):
             # tensor_list[i] = (tensor_list[i] - data_means[i]) / data_stds[i] / 10
             normalized = (tensor_list[i] - data_min[i]) / (data_max[i] - data_min[i]) * 2 - 1
             if type(normalized) is np.ndarray:
-                normalized = torch.from_numpy(normalized)
+                normalized = paddle.to_tensor(normalized)
             normalized_tensors.append(normalized)
         if stack_output:
-            normalized_tensors = torch.stack(normalized_tensors, dim=1)
+            normalized_tensors = paddle.stack(normalized_tensors, axis=1)
         return normalized_tensors
 
     def _download(self):
@@ -97,3 +96,15 @@ class MeshAirfoilDataset(Dataset):
         reynolds = np.array(reynolds)[np.newaxis].astype(np.float32) if reynolds != 'None' else None
         mach = np.array(s[s.index('mach') + 1])[np.newaxis].astype(np.float32)
         return aoa, reynolds, mach
+
+
+if __name__ == '__main__':
+    device = paddle.set_device("cpu")
+
+    train_data = MeshAirfoilDataset("data/NACA0012_interpolate", mode='train')
+    val_data = MeshAirfoilDataset("data/NACA0012_interpolate", mode='test')
+
+    val_loader = DataLoader(val_data, batch_size=2, shuffle=True, num_workers=2)
+
+    for i, x in enumerate(val_loader):
+        print(i)

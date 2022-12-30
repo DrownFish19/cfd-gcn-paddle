@@ -4,15 +4,15 @@ import matplotlib.pyplot as plt
 import matplotlib.collections
 import matplotlib.cm as cm
 
-import torch
-import torch_geometric
+import paddle
+# import torch_geometric
 
 from os import PathLike
 from typing import Sequence, Dict, Union, Tuple, List
 
-from scipy.spatial.qhull import Delaunay
+from scipy.spatial import Delaunay
 
-UnionTensor = Union[torch.Tensor, np.ndarray]
+UnionTensor = Union[paddle.Tensor, np.ndarray]
 
 
 SU2_SHAPE_IDS = {
@@ -66,7 +66,7 @@ def get_mesh_graph(mesh_filename: Union[str, PathLike],
                         raise NotImplementedError
                     elem = elem[1:1+n]
                     edges += [[elem[i], elem[(i+1) % n]] for i in range(n)]
-                edges = np.array(edges, dtype=np.long).transpose()
+                edges = np.array(edges, dtype=np.compat.long).transpose()
                 # triangles = np.array(triangles, dtype=np.long)
                 # quads = np.array(quads, dtype=np.long)
                 elems = [triangles, quads]
@@ -182,7 +182,7 @@ def generate_mesh(mesh_type='regular', airfoil_nodes=None, farfield_nodes=None,
         nodes = nodes[non_repeated_inds]
 
         # add airfoil nodes and remove nodes that are inside the airfoil
-        nodes_with_airfoil = torch.from_numpy(np.concatenate([nodes, airfoil_nodes], axis=0))
+        nodes_with_airfoil = paddle.to_tensor(np.concatenate([nodes, airfoil_nodes], axis=0))
         airfoil_inds = np.arange(nodes.shape[0], nodes_with_airfoil.shape[0])
         airfoil_signed_dists = signed_dist_graph(nodes_with_airfoil, airfoil_inds, with_sign=True).numpy()
         is_inside_airfoil = (airfoil_signed_dists < 0)
@@ -209,7 +209,7 @@ def generate_mesh(mesh_type='regular', airfoil_nodes=None, farfield_nodes=None,
         nodes = nodes[non_repeated_inds]
 
         # add airfoil nodes and remove nodes that are inside the airfoil
-        nodes_with_farfield = torch.from_numpy(np.concatenate([nodes, farfield_nodes], axis=0))
+        nodes_with_farfield = paddle.to_tensor(np.concatenate([nodes, farfield_nodes], axis=0))
         farfield_inds = np.arange(nodes.shape[0], nodes_with_farfield.shape[0])
         farfield_signed_dists = signed_dist_graph(nodes_with_farfield, farfield_inds, with_sign=True).numpy()
         is_outside_farfield = (farfield_signed_dists > 0)
@@ -263,9 +263,9 @@ def delauney(x):
     else:
         raise ValueError(
             'Not enough points to contruct Delaunay triangulation, got {} '
-            'but expected at least 3'.format(data.pos.size(0)))
+            'but expected at least 3'.format(pos.size(0)))
 
-    elems = face.astype(np.long)
+    elems = face.astype(np.compat.long)
     # elems = face.t().contiguous().to(x.device, torch.long)
 
     # remove triangles between boundary nodes (eg, "inside" airfoil)
@@ -281,7 +281,7 @@ def delauney(x):
 def get_dists(edge_index, pos, norm=True, max=None):
     """Adapted from torch_geometric.transforms.Distance"""
     (row, col), pos = edge_index, pos
-    dist = torch.norm(pos[col] - pos[row], p=2, dim=-1).view(-1, 1)
+    dist = paddle.norm(pos[col] - pos[row], p=2, axis=-1).view(-1, 1)
     if norm and dist.numel() > 0:
         dist = dist / dist.max() if max is None else max
     return dist
@@ -290,7 +290,7 @@ def get_dists(edge_index, pos, norm=True, max=None):
 def is_ccw(points, ret_val=False):
     """From: https://stackoverflow.com/questions/1165647#1180256"""
     n = points.shape[0]
-    a = torch.argmin(points[:, 1])
+    a = paddle.argmin(points[:, 1])
     b = (a - 1) % n
     c = (a + 1) % n
 
@@ -325,13 +325,13 @@ def quad2tri(elems):
         else:
             new_elems.append([e[0], e[1], e[2]])
             new_elems.append([e[0], e[2], e[3]])
-            new_edges.append(torch.tensor(([[e[0]], [e[2]]]), dtype=torch.long))
-    new_edges = torch.cat(new_edges, dim=1) if new_edges else torch.tensor([], dtype=torch.long)
+            new_edges.append(paddle.to_tensor(([[e[0]], [e[2]]]), dtype=paddle.int64))
+    new_edges = paddle.concat(new_edges, axis=1) if new_edges else paddle.to_tensor([], dtype=paddle.int64)
     return new_elems, new_edges
 
 
 def left_orthogonal(v):
-    return torch.stack([-v[..., 1], v[..., 0]], dim=-1)
+    return paddle.stack([-v[..., 1], v[..., 0]], axis=-1)
 
 
 def signed_dist_graph(nodes, marker_inds, with_sign=False):
@@ -339,14 +339,14 @@ def signed_dist_graph(nodes, marker_inds, with_sign=False):
     # approximate signed distance by distance to closest point on surface
     signed_dists = nodes.new_zeros(nodes.shape[0])
     marker_nodes = nodes[marker_inds]
-    if type(marker_inds) is torch.Tensor:
+    if type(marker_inds) is paddle.Tensor:
         marker_inds = marker_inds.tolist()
     marker_inds = set(marker_inds)
 
     if with_sign:
         marker_surfaces = marker_nodes[:-1] - marker_nodes[1:]
         last_surface = marker_nodes[-1] - marker_nodes[0]
-        marker_surfaces = torch.cat([marker_surfaces, last_surface.unsqueeze(0)])
+        marker_surfaces = paddle.concat([marker_surfaces, last_surface.unsqueeze(0)])
         normals = left_orthogonal(marker_surfaces) / marker_surfaces.norm(dim=1).unsqueeze(1)
 
     for i, x in enumerate(nodes):
@@ -435,16 +435,16 @@ if __name__ == '__main__':
     start = time.time()
     x, edge_index, _, marker_dict = get_mesh_graph(f'meshes/{mesh}')
 
-    x = torch.from_numpy(x).float()
-    edge_index = torch.from_numpy(edge_index)
+    x = paddle.to_tensor(x, dtype=paddle.float32)
+    edge_index = paddle.to_tensor(edge_index)
 
     # g = GraphUNet(2, 2, 2, 2, pool_ratios=0.5)
     # print(g(x, edge_index).shape)
 
-    data = torch_geometric.data.Data(pos=x)
-    triangulation = Delaunay()(data)
-    airfoil_markers = set(marker_dict['airfoil'][0].tolist())
-    elems = triangulation.face
+    # data = torch_geometric.data.Data(pos=x)
+    triangulation = Delaunay(x)
+    airfoil_markers = set(marker_dict['airfoil'][0])
+    elems = triangulation.simplices
     keep_inds = [i for i in range(elems.shape[1])
                  if not (elems[0, i].item() in airfoil_markers and
                          elems[1, i].item() in airfoil_markers and
