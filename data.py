@@ -26,11 +26,11 @@ class MeshAirfoilDataset(Dataset):
         with open(self.data_dir.parent / 'train_max_min.pkl', 'rb') as f:
             self.normalization_factors = pickle.load(f)
 
-        self.nodes = paddle.to_tensor(self.mesh_graph[0])
-        self.edges = paddle.to_tensor(self.mesh_graph[1])
+        self.nodes = self.mesh_graph[0]
+        self.edges = self.mesh_graph[1]
         self.elems_list = self.mesh_graph[2]
         self.marker_dict = self.mesh_graph[3]
-        self.node_markers = paddle.full([self.nodes.shape[0], 1], fill_value=-1)
+        self.node_markers = np.full([self.nodes.shape[0], 1], fill_value=-1)
         for i, (marker_tag, marker_elems) in enumerate(self.marker_dict.items()):
             for elem in marker_elems:
                 self.node_markers[elem[0]] = i
@@ -46,18 +46,16 @@ class MeshAirfoilDataset(Dataset):
 
         aoa, reynolds, mach = self.get_params_from_name(self.file_list[idx])
         aoa = aoa
-        aoa = paddle.to_tensor(aoa)
         mach_or_reynolds = mach if reynolds is None else reynolds
-        mach_or_reynolds = paddle.to_tensor(mach_or_reynolds)
 
         norm_aoa = aoa / 10
         norm_mach_or_reynolds = mach_or_reynolds if reynolds is None else (mach_or_reynolds - 1.5e6) / 1.5e6
 
         # add physics parameters to graph
-        nodes = paddle.concat([
+        nodes = np.concatenate([
             self.nodes,
-            paddle.repeat_interleave(x=norm_aoa, repeats=self.nodes.shape[0]).unsqueeze(-1),
-            paddle.repeat_interleave(x=norm_mach_or_reynolds, repeats=self.nodes.shape[0]).unsqueeze(-1),
+            np.repeat(a=norm_aoa, repeats=self.nodes.shape[0])[:,np.newaxis],
+            np.repeat(a=norm_mach_or_reynolds, repeats=self.nodes.shape[0])[:,np.newaxis],
             self.node_markers
         ], axis=-1)
 
@@ -75,11 +73,9 @@ class MeshAirfoilDataset(Dataset):
         for i in range(len(tensor_list)):
             # tensor_list[i] = (tensor_list[i] - data_means[i]) / data_stds[i] / 10
             normalized = (tensor_list[i] - data_min[i]) / (data_max[i] - data_min[i]) * 2 - 1
-            if type(normalized) is np.ndarray:
-                normalized = paddle.to_tensor(normalized)
             normalized_tensors.append(normalized)
         if stack_output:
-            normalized_tensors = paddle.stack(normalized_tensors, axis=1)
+            normalized_tensors = np.stack(normalized_tensors, axis=1)
         return normalized_tensors
 
     def _download(self):
@@ -99,7 +95,7 @@ class MeshAirfoilDataset(Dataset):
 
 
 if __name__ == '__main__':
-    device = paddle.set_device("cpu")
+    device = paddle.set_device("gpu")
 
     train_data = MeshAirfoilDataset("data/NACA0012_interpolate", mode='train')
     val_data = MeshAirfoilDataset("data/NACA0012_interpolate", mode='test')
@@ -108,3 +104,4 @@ if __name__ == '__main__':
 
     for i, x in enumerate(val_loader):
         print(i)
+        print(x)
