@@ -8,8 +8,8 @@ import numpy as np
 from mpi4py import MPI
 
 import SU2
-import SU2.pysu2 as pysu2
-import SU2.pysu2ad as pysu2ad
+import pysu2
+import pysu2ad
 
 from typing import Sequence, Union, Tuple, Dict, TypeVar
 
@@ -202,7 +202,6 @@ def main(remove_temp_files: bool = True) -> None:
         if run_type == RunCode.STOP:
             # remove temporary files
             if local_rank == 0 and remove_temp_files:
-                import sys
                 os.system(f'rm b*_{ppid}_* 2> /dev/null')
             break
 
