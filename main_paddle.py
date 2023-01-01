@@ -1,11 +1,9 @@
-import logging
 import os
 import sys
-import time
 from argparse import ArgumentParser
-from pathlib import Path
 
-import tqdm
+os.environ['SU2_RUN'] = '/home/wgzhu/github/SU2_bin'
+sys.path.append('/home/wgzhu/github/SU2_bin')
 
 import paddle
 from paddle.io import DataLoader
@@ -13,20 +11,20 @@ from paddle import nn, optimizer
 from common import make_grid
 from paddle import to_tensor
 
-from mesh_utils import plot_field, is_ccw, is_cw
-from SU2.su2paddle import activate_su2_mpi
+from mesh_utils import plot_field, is_ccw
+# from su2paddle import activate_su2_mpi
 from data import MeshAirfoilDataset
 from models import CFDGCN, MeshGCN, UCM, CFD
 
 
 def parse_args():
     parser = ArgumentParser()
-    parser.add_argument('--exp-name', '-e', default='',
+    parser.add_argument('--exp-name', '-e', default='gcn_interp',
                         help='Experiment name, defaults to model name.')
-    parser.add_argument('--su2-config', '-sc', default='coarse_train.cfg')
-    parser.add_argument('--data-dir', '-d', default='data/128px_NACA0012_fine_3NN',
+    parser.add_argument('--su2-config', '-sc', default='coarse.cfg')
+    parser.add_argument('--data-dir', '-d', default='data/NACA0012_interpolate',
                         help='Directory with dataset.')
-    parser.add_argument('--coarse-mesh', default=None,
+    parser.add_argument('--coarse-mesh', default='meshes/mesh_NACA0012_xcoarse.su2',
                         help='Path to coarse mesh (required for CFD-GCN).')
     parser.add_argument('--version', type=int, default=None,
                         help='If specified log version doesnt exist, create it.'
@@ -38,7 +36,7 @@ def parse_args():
     parser.add_argument('--max-epochs', '-me', type=int, default=500,
                         help='Max number of epochs to train for.')
     parser.add_argument('--optim', default='adam', help='Optimizer.')
-    parser.add_argument('--batch-size', '-bs', type=int, default=16)
+    parser.add_argument('--batch-size', '-bs', type=int, default=8)
     parser.add_argument('--learning-rate', '-lr', dest='lr', type=float, default=5e-5)
     parser.add_argument('--num-layers', '-nl', type=int, default=6)
     parser.add_argument('--num-end-convs', type=int, default=3)
@@ -54,7 +52,7 @@ def parse_args():
                         help='Random seed')
     parser.add_argument('--gpus', type=int, default=1,
                         help='Number of gpus to use, 0 for none.')
-    parser.add_argument('--dataloader-workers', '-dw', type=int, default=4,
+    parser.add_argument('--dataloader-workers', '-dw', type=int, default=2,
                         help='Number of Pytorch Dataloader workers to use.')
     parser.add_argument('--train-val-split', '-tvs', type=float, default=0.9,
                         help='Percentage of training set to use for training.')
@@ -95,8 +93,8 @@ class PaddleWrapper:
         self.val_data = MeshAirfoilDataset(hparams.data_dir, mode='test')
         self.test_data = MeshAirfoilDataset(hparams.data_dir, mode='test')
 
-        in_channels = self.data[0].x.shape[-1]
-        out_channels = self.data[0].y.shape[-1]
+        in_channels = self.data[0]['x'].shape[-1]
+        out_channels = self.data[0]['y'].shape[-1]
         hidden_channels = hparams.hidden_size
 
         if hparams.model == 'cfd_gcn':
@@ -145,9 +143,9 @@ class PaddleWrapper:
             self.optimizer = optimizer.SGD(parameters=self.parameters, learning_rate=self.hparams.lr)
 
         # config dataloader
-        self.train_loader = trainer.train_dataloader()
-        self.val_loader = trainer.val_dataloader()
-        self.test_loader = trainer.test_dataloader()
+        self.train_loader = self.train_dataloader()
+        self.val_loader = self.val_dataloader()
+        self.test_loader = self.test_dataloader()
 
         # config criterion
         self.criterion = paddle.nn.loss.MSELoss()
@@ -156,16 +154,16 @@ class PaddleWrapper:
         self.global_step = 0
 
     def on_epoch_start(self):
-        logging.info('------')
+        print('------', flush=True)
         self.sum_loss = 0.0
 
     def on_epoch_end(self):
         avg_loss = self.sum_loss / max(len(self.train_loader), 1)
-        logging.info("train_loss:{},step:{}".format(avg_loss, self.global_step))
+        print("train_loss:{},step:{}".format(avg_loss, self.global_step), flush=True)
 
     def common_step(self, batch):
         true_fields = batch['y']
-        pred_fields = self.model(batch['x'])  # TODO:修改此处，适合模型输入
+        pred_fields = self.model(batch)
 
         mse_loss = self.criterion(pred_fields, true_fields)
         sub_losses = {'batch_mse_loss': mse_loss}
@@ -185,7 +183,12 @@ class PaddleWrapper:
 
         self.sum_loss += loss.item()
 
-        logging.info("batch_train_loss:{}".format(loss))
+        print("batch_train_loss:{}".format(loss), flush=True)
+
+        loss.backward()
+        self.optimizer.step()
+        self.optimizer.clear_grad()
+
 
     def validation_step(self, batch, batch_idx):
         loss, pred, sub_losses = self.common_step(batch)
@@ -194,7 +197,7 @@ class PaddleWrapper:
             # log images only once per val epoch
             self.log_images(batch.x[:, :2], pred, batch.y, batch.batch, self.data.elems_list, 'val')
 
-        logging.info("batch_train_loss:{}".format(loss))
+        print("batch_train_loss:{}".format(loss), flush=True)
 
         return loss.item()
 
@@ -215,8 +218,7 @@ class PaddleWrapper:
                                   shuffle=(self.hparams.train_pct == 1.0),  # don't shuffle if using reduced set
                                   num_workers=self.hparams.dataloader_workers)
         if self.hparams.verbose:
-            logging.info(f'Train data: {len(self.data)} examples, '
-                         f'{len(train_loader)} batches.')
+            print(f'Train data: {len(self.data)} examples, 'f'{len(train_loader)} batches.', flush=True)
         return train_loader
 
     def val_dataloader(self):
@@ -226,8 +228,7 @@ class PaddleWrapper:
                                 shuffle=True,
                                 num_workers=self.hparams.dataloader_workers)
         if self.hparams.verbose:
-            logging.info(f'Val data: {len(self.val_data)} examples, '
-                         f'{len(val_loader)} batches.')
+            print(f'Val data: {len(self.val_data)} examples, 'f'{len(val_loader)} batches.', flush=True)
         return val_loader
 
     def test_dataloader(self):
@@ -236,8 +237,7 @@ class PaddleWrapper:
                                  shuffle=False,
                                  num_workers=self.hparams.dataloader_workers)
         if self.hparams.verbose:
-            logging.info(f'Test data: {len(self.test_data)} examples, '
-                         f'{len(test_loader)} batches.')
+            print(f'Test data: {len(self.test_data)} examples, 'f'{len(test_loader)} batches.', flush=True)
         return test_loader
 
     def log_images(self, nodes, pred, true, batch, elems_list, mode, log_idx=0):
@@ -288,7 +288,8 @@ class PaddleWrapper:
 
 
 if __name__ == '__main__':
-    activate_su2_mpi(remove_temp_files=True)
+    paddle.set_device("gpu")
+    # activate_su2_mpi(remove_temp_files=True)
 
     args = parse_args()
     print(args, file=sys.stderr)
@@ -309,7 +310,7 @@ if __name__ == '__main__':
             val_loss = trainer.validation_step(x, i)
             total_val_loss.append(val_loss)
         mean_val_loss = paddle.stack(total_val_loss).mean()
-        logging.info("val_loss (mean):{}".format(mean_val_loss))
+        print("val_loss (mean):{}".format(mean_val_loss), flush=True)
 
         # for test
         total_test_loss = []
@@ -317,6 +318,6 @@ if __name__ == '__main__':
             test_loss = trainer.test_step(x, i)
             total_test_loss.append(test_loss)
         mean_test_loss = paddle.stack(total_test_loss).mean()
-        logging.info("test_loss (mean):{}".format(mean_test_loss))
+        print("test_loss (mean):{}".format(mean_test_loss), flush=True)
 
         trainer.on_epoch_end()

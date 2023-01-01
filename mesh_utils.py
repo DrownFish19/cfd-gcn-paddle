@@ -337,7 +337,7 @@ def left_orthogonal(v):
 def signed_dist_graph(nodes, marker_inds, with_sign=False):
     # assumes shape is convex
     # approximate signed distance by distance to closest point on surface
-    signed_dists = nodes.new_zeros(nodes.shape[0])
+    signed_dists = paddle.zeros([nodes.shape[0]], dtype=paddle.float32)
     marker_nodes = nodes[marker_inds]
     if type(marker_inds) is paddle.Tensor:
         marker_inds = marker_inds.tolist()
@@ -352,7 +352,7 @@ def signed_dist_graph(nodes, marker_inds, with_sign=False):
     for i, x in enumerate(nodes):
         if i not in marker_inds:
             vecs = marker_nodes - x
-            dists = vecs.norm(dim=1)
+            dists = paddle.linalg.norm(vecs, axis=1)
             min_dist = dists.min()
 
             if with_sign:

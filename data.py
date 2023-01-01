@@ -57,7 +57,7 @@ class MeshAirfoilDataset(Dataset):
             np.repeat(a=norm_aoa, repeats=self.nodes.shape[0])[:,np.newaxis],
             np.repeat(a=norm_mach_or_reynolds, repeats=self.nodes.shape[0])[:,np.newaxis],
             self.node_markers
-        ], axis=-1)
+        ], axis=-1).astype(np.float32)
 
         # data = MeshGraphData(x=nodes, y=fields, edge_index=self.edges, aoa=aoa, norm_aoa=norm_aoa,
         #                      mach_or_reynolds=mach_or_reynolds, norm_mach_or_reynolds=norm_mach_or_reynolds)

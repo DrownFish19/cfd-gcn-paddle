@@ -1,5 +1,4 @@
 import os
-import logging
 import sys
 import time
 
@@ -11,7 +10,7 @@ from paddle import nn
 # from torch_geometric.nn.conv import GCNConv
 # from torch_geometric.nn.unpool import knn_interpolate
 
-from SU2.su2torch import SU2Module
+from su2paddle import SU2Module
 from mesh_utils import write_graph_mesh, quad2tri, get_mesh_graph, signed_dist_graph, is_cw
 
 
@@ -24,20 +23,21 @@ class GCNConv(nn.Layer):
         self.activation = activation
 
     def forward(self, x, edge_index):
-        src_index = edge_index[0, :]
-        dst_index = edge_index[1, :]
+        batch_size = x.shape[0]
+        src_index = edge_index[:, 0, :].reshape([-1])
+        dst_index = edge_index[:, 1, :].reshape([-1])
 
-        x = self.linear(x)
-        x = paddle.incubate.graph_send_recv(x, src_index, dst_index, pool_type="sum")
+        x = self.linear(x.reshape([-1, x.shape[-1]]))
+        x = paddle.incubate.graph_send_recv(x, src_index, dst_index, pool_type="mean")
         # x = nn.functional.relu(x)
 
-        return x
+        return x.reshape([batch_size, -1, x.shape[-1]])
 
 
 class MeshGCN(nn.Layer):
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers=6, fine_marker_dict=None):
         super().__init__()
-        self.fine_marker_dict = paddle.to_tensor(fine_marker_dict['airfoil']).unique()
+        self.fine_marker_dict = paddle.unique(paddle.to_tensor(fine_marker_dict['airfoil']))
         self.sdf = None
         in_channels += 1  # account for sdf
 
@@ -56,8 +56,9 @@ class MeshGCN(nn.Layer):
 
         if self.sdf is None:
             with paddle.no_grad():
-                self.sdf = signed_dist_graph(x[data.batch == 0, :2], self.fine_marker_dict).unsqueeze(1)
-        x = paddle.concat([data.x, self.sdf.repeat(batch_size, 1)], axis=1)
+                self.sdf = signed_dist_graph(x[0, :, :2], self.fine_marker_dict).unsqueeze(1)
+        x = paddle.concat([x, paddle.repeat_interleave(self.sdf.unsqueeze(0), batch_size).reshape([batch_size,-1,1])],
+                          axis=-1)
 
         for i, conv in enumerate(self.convs[:-1]):
             x = conv(x, edge_index)
