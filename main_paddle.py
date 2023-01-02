@@ -2,11 +2,14 @@ import os
 import sys
 from argparse import ArgumentParser
 
-os.environ['SU2_RUN'] = '/home/wgzhu/github/SU2_bin'
-sys.path.append('/home/wgzhu/github/SU2_bin')
+import numpy as np
+
+os.environ['SU2_RUN'] = '/root/autodl-tmp/SU2_bin'
+sys.path.append('/root/autodl-tmp/SU2_bin')
 
 import paddle
-from paddle.io import DataLoader
+# from paddle.io import DataLoader
+from pgl.utils.data.dataloader import Dataloader
 from paddle import nn, optimizer
 from common import make_grid
 from paddle import to_tensor
@@ -33,12 +36,12 @@ def parse_args():
 
     parser.add_argument('--model', '-m', default='gcn',
                         help='Which model to use.')
-    parser.add_argument('--max-epochs', '-me', type=int, default=500,
+    parser.add_argument('--max-epochs', '-me', type=int, default=1000,
                         help='Max number of epochs to train for.')
     parser.add_argument('--optim', default='adam', help='Optimizer.')
-    parser.add_argument('--batch-size', '-bs', type=int, default=8)
+    parser.add_argument('--batch-size', '-bs', type=int, default=4)
     parser.add_argument('--learning-rate', '-lr', dest='lr', type=float, default=5e-5)
-    parser.add_argument('--num-layers', '-nl', type=int, default=6)
+    parser.add_argument('--num-layers', '-nl', type=int, default=3)
     parser.add_argument('--num-end-convs', type=int, default=3)
     parser.add_argument('--hidden-size', '-hs', type=int, default=512)
     parser.add_argument('--freeze-mesh', action='store_true',
@@ -84,6 +87,18 @@ def parse_args():
     return args
 
 
+def collate_fn(batch_data):
+    # graphs = []
+    # labels = []
+    # for g in batch_data:
+    #     graphs.append(g)
+    #     labels.append(g.y)
+    #
+    # return graphs, labels
+
+    return batch_data
+
+
 class PaddleWrapper:
     def __init__(self, hparams):
         self.hparams = hparams
@@ -93,8 +108,8 @@ class PaddleWrapper:
         self.val_data = MeshAirfoilDataset(hparams.data_dir, mode='test')
         self.test_data = MeshAirfoilDataset(hparams.data_dir, mode='test')
 
-        in_channels = self.data[0]['x'].shape[-1]
-        out_channels = self.data[0]['y'].shape[-1]
+        in_channels = self.data[0].node_feat["feature"].shape[-1]
+        out_channels = self.data[0].y.shape[-1]
         hidden_channels = hparams.hidden_size
 
         if hparams.model == 'cfd_gcn':
@@ -161,20 +176,23 @@ class PaddleWrapper:
         avg_loss = self.sum_loss / max(len(self.train_loader), 1)
         print("train_loss:{},step:{}".format(avg_loss, self.global_step), flush=True)
 
-    def common_step(self, batch):
-        true_fields = batch['y']
-        pred_fields = self.model(batch)
+    def common_step(self, graphs):
+        loss = 0.0
+        pred_fields = []
+        for graph in graphs:
+            true_field = graph.y
+            pred_field = self.model(graph, paddle.to_tensor(graph.node_feat["feature"]))
+            mse_loss = self.criterion(pred_field, true_field)
+            loss += mse_loss
 
-        mse_loss = self.criterion(pred_fields, true_fields)
-        sub_losses = {'batch_mse_loss': mse_loss}
-        loss = mse_loss
-
+        loss = loss / len(graphs)
+        # pred_fields = paddle.stack(pred_fields)
         self.global_step += 1
 
-        return loss, pred_fields, sub_losses
+        return loss, pred_fields
 
     def training_step(self, batch, batch_idx):
-        loss, pred, sub_losses = self.common_step(batch)
+        loss, pred = self.common_step(batch)
 
         # if batch_idx + 1 == self.trainer.val_check_batch:
         #     # log images when doing val check
@@ -183,59 +201,61 @@ class PaddleWrapper:
 
         self.sum_loss += loss.item()
 
-        print("batch_train_loss:{}".format(loss), flush=True)
+        print("batch_train_loss:{}".format(loss.item()), flush=True)
 
         loss.backward()
         self.optimizer.step()
         self.optimizer.clear_grad()
 
-
     def validation_step(self, batch, batch_idx):
-        loss, pred, sub_losses = self.common_step(batch)
+        loss, pred = self.common_step(batch)
 
-        if batch_idx == 0:
+        # if batch_idx == 0:
             # log images only once per val epoch
-            self.log_images(batch.x[:, :2], pred, batch.y, batch.batch, self.data.elems_list, 'val')
+            # self.log_images(batch.x[:, :2], pred, batch.y, batch.batch, self.data.elems_list, 'val')
 
-        print("batch_train_loss:{}".format(loss), flush=True)
+        print("batch_val_loss:{}".format(loss.item()), flush=True)
 
         return loss.item()
 
     def test_step(self, batch, batch_idx):
-        loss, pred, sub_losses = self.common_step(batch)
+        loss, pred = self.common_step(batch)
 
-        batch_size = batch.batch.max()
+        # batch_size = batch.batch.max()
         self.step = 0 if self.step is None else self.step
-        for i in range(batch_size):
-            self.log_images(batch.x[:, :2], pred, batch.y, batch.batch, self.data.elems_list, 'test', log_idx=i)
+        # for i in range(batch_size):
+        #     self.log_images(batch.x[:, :2], pred, batch.y, batch.batch, self.data.elems_list, 'test', log_idx=i)
         self.step += 1
 
         return loss.item()
 
     def train_dataloader(self):
-        train_loader = DataLoader(self.data,
+        train_loader = Dataloader(self.data,
                                   batch_size=self.hparams.batch_size,
                                   shuffle=(self.hparams.train_pct == 1.0),  # don't shuffle if using reduced set
-                                  num_workers=self.hparams.dataloader_workers)
+                                  num_workers=1,
+                                  collate_fn=collate_fn)
         if self.hparams.verbose:
             print(f'Train data: {len(self.data)} examples, 'f'{len(train_loader)} batches.', flush=True)
         return train_loader
 
     def val_dataloader(self):
         # use test data here to get full training curve for test set
-        val_loader = DataLoader(self.val_data,
+        val_loader = Dataloader(self.val_data,
                                 batch_size=self.hparams.batch_size,
-                                shuffle=True,
-                                num_workers=self.hparams.dataloader_workers)
+                                shuffle=False,
+                                num_workers=1,
+                                collate_fn=collate_fn)
         if self.hparams.verbose:
             print(f'Val data: {len(self.val_data)} examples, 'f'{len(val_loader)} batches.', flush=True)
         return val_loader
 
     def test_dataloader(self):
-        test_loader = DataLoader(self.test_data,
+        test_loader = Dataloader(self.test_data,
                                  batch_size=self.hparams.batch_size,
                                  shuffle=False,
-                                 num_workers=self.hparams.dataloader_workers)
+                                 num_workers=1,
+                                 collate_fn=collate_fn)
         if self.hparams.verbose:
             print(f'Test data: {len(self.test_data)} examples, 'f'{len(test_loader)} batches.', flush=True)
         return test_loader
@@ -301,15 +321,17 @@ if __name__ == '__main__':
         trainer.on_epoch_start()
 
         # for train
-        for i, x in enumerate(trainer.train_loader):
-            trainer.training_step(x, i)
+        for i, graphs in enumerate(trainer.train_loader()):
+            trainer.training_step(graphs, i)
+
+        trainer.on_epoch_end()
 
         # for val
         total_val_loss = []
         for i, x in enumerate(trainer.val_loader):
             val_loss = trainer.validation_step(x, i)
             total_val_loss.append(val_loss)
-        mean_val_loss = paddle.stack(total_val_loss).mean()
+        mean_val_loss = np.stack(total_val_loss).mean()
         print("val_loss (mean):{}".format(mean_val_loss), flush=True)
 
         # for test
@@ -317,7 +339,7 @@ if __name__ == '__main__':
         for i, x in enumerate(trainer.test_loader):
             test_loss = trainer.test_step(x, i)
             total_test_loss.append(test_loss)
-        mean_test_loss = paddle.stack(total_test_loss).mean()
+        mean_test_loss = np.stack(total_test_loss).mean()
         print("test_loss (mean):{}".format(mean_test_loss), flush=True)
 
-        trainer.on_epoch_end()
+

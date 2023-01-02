@@ -1,37 +1,37 @@
 import os
-import sys
 import time
 
 import paddle
 import paddle.nn.functional as F
 from paddle import nn
+from pgl.nn import GCNConv, GATConv
+
+from mesh_utils import write_graph_mesh, quad2tri, get_mesh_graph, signed_dist_graph, is_cw
+from su2paddle import SU2Module
+
 
 # import torch_geometric
 # from torch_geometric.nn.conv import GCNConv
 # from torch_geometric.nn.unpool import knn_interpolate
 
-from su2paddle import SU2Module
-from mesh_utils import write_graph_mesh, quad2tri, get_mesh_graph, signed_dist_graph, is_cw
-
-
-class GCNConv(nn.Layer):
-    def __init__(self, input_size, output_size, activation='relu'):
-        super(GCNConv, self).__init__()
-        self.input_size = input_size
-        self.output_size = output_size
-        self.linear = nn.Linear(input_size, output_size)
-        self.activation = activation
-
-    def forward(self, x, edge_index):
-        batch_size = x.shape[0]
-        src_index = edge_index[:, 0, :].reshape([-1])
-        dst_index = edge_index[:, 1, :].reshape([-1])
-
-        x = self.linear(x.reshape([-1, x.shape[-1]]))
-        x = paddle.incubate.graph_send_recv(x, src_index, dst_index, pool_type="mean")
-        # x = nn.functional.relu(x)
-
-        return x.reshape([batch_size, -1, x.shape[-1]])
+# class GCNConv(nn.Layer):
+#     def __init__(self, input_size, output_size, activation='relu'):
+#         super(GCNConv, self).__init__()
+#         self.input_size = input_size
+#         self.output_size = output_size
+#         self.linear = nn.Linear(input_size, output_size)
+#         self.activation = activation
+#
+#     def forward(self, x, edge_index):
+#         batch_size = x.shape[0]
+#         src_index = edge_index[:, 0, :].reshape([-1])
+#         dst_index = edge_index[:, 1, :].reshape([-1])
+#
+#         x = self.linear(x.reshape([-1, x.shape[-1]]))
+#         x = paddle.incubate.graph_send_recv(x, src_index, dst_index, pool_type="mean")
+#         # x = nn.functional.relu(x)
+#
+#         return x.reshape([batch_size, -1, x.shape[-1]])
 
 
 class MeshGCN(nn.Layer):
@@ -46,25 +46,26 @@ class MeshGCN(nn.Layer):
         channels += [out_channels]
 
         self.convs = nn.LayerList()
-        for i in range(num_layers):
-            self.convs.append(GCNConv(channels[i], channels[i + 1]))
+        # for i in range(num_layers):
+        #     self.convs.append(GCNConv(channels[i], channels[i + 1]))
 
-    def forward(self, data):
-        x = data['x']
-        edge_index = data['edge_index']
-        batch_size = data['aoa'].shape[0]
+        self.convs.append(GATConv(channels[0], channels[1], num_heads=4))
+        for i in range(1, num_layers - 1):
+            self.convs.append(GATConv(channels[i] * 4, channels[i + 1], num_heads=4))
+        self.convs.append(GATConv(channels[num_layers - 1]*4, channels[num_layers], num_heads=1))
+
+    def forward(self, graph, x):
 
         if self.sdf is None:
             with paddle.no_grad():
-                self.sdf = signed_dist_graph(x[0, :, :2], self.fine_marker_dict).unsqueeze(1)
-        x = paddle.concat([x, paddle.repeat_interleave(self.sdf.unsqueeze(0), batch_size).reshape([batch_size,-1,1])],
-                          axis=-1)
+                self.sdf = signed_dist_graph(x[:, :2], self.fine_marker_dict).unsqueeze(1)
+        x = paddle.concat([x, self.sdf], axis=-1)
 
         for i, conv in enumerate(self.convs[:-1]):
-            x = conv(x, edge_index)
+            x = conv(graph, x)
             x = F.relu(x)
 
-        x = self.convs[-1](x, edge_index)
+        x = self.convs[-1](graph, x)
         return x
 
 

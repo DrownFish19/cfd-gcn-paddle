@@ -3,9 +3,9 @@ import pickle
 from pathlib import Path
 
 import numpy as np
-
 import paddle
-from paddle.io import Dataset, DataLoader
+import pgl
+from pgl.utils.data.dataloader import Dataloader, Dataset
 
 from mesh_utils import get_mesh_graph
 
@@ -27,7 +27,7 @@ class MeshAirfoilDataset(Dataset):
             self.normalization_factors = pickle.load(f)
 
         self.nodes = self.mesh_graph[0]
-        self.edges = self.mesh_graph[1]
+        self.edges = paddle.to_tensor(self.mesh_graph[1]).transpose([1, 0])
         self.elems_list = self.mesh_graph[2]
         self.marker_dict = self.mesh_graph[3]
         self.node_markers = np.full([self.nodes.shape[0], 1], fill_value=-1)
@@ -36,35 +36,47 @@ class MeshAirfoilDataset(Dataset):
                 self.node_markers[elem[0]] = i
                 self.node_markers[elem[1]] = i
 
+        self.graphs = []
+
+        for idx in range(self.len):
+            with open(self.data_dir / self.file_list[idx], 'rb') as f:
+                fields = pickle.load(f)
+            fields = paddle.to_tensor(self.preprocess(fields))
+
+            aoa, reynolds, mach = self.get_params_from_name(self.file_list[idx])
+            aoa = paddle.to_tensor(aoa)
+            mach_or_reynolds = paddle.to_tensor(mach if reynolds is None else reynolds)
+
+            norm_aoa = paddle.to_tensor(aoa / 10)
+            norm_mach_or_reynolds = paddle.to_tensor(
+                mach_or_reynolds if reynolds is None else (mach_or_reynolds - 1.5e6) / 1.5e6)
+
+            # add physics parameters to graph
+            nodes = np.concatenate([
+                self.nodes,
+                np.repeat(a=norm_aoa, repeats=self.nodes.shape[0])[:, np.newaxis],
+                np.repeat(a=norm_mach_or_reynolds, repeats=self.nodes.shape[0])[:, np.newaxis],
+                self.node_markers
+            ], axis=-1).astype(np.float32)
+            nodes = paddle.to_tensor(nodes)
+
+            graph = pgl.Graph(num_nodes=nodes.shape[0],
+                              edges=self.edges,
+                              node_feat={"feature": nodes})
+
+            graph.y = fields
+            graph.aoa = aoa
+            graph.norm_aoa = norm_aoa
+            graph.mach_or_reynolds = mach_or_reynolds
+            graph.norm_mach_or_reynolds = norm_mach_or_reynolds
+
+            self.graphs.append(graph)
+
     def __len__(self):
         return self.len
 
     def __getitem__(self, idx):
-        with open(self.data_dir / self.file_list[idx], 'rb') as f:
-            fields = pickle.load(f)
-        fields = self.preprocess(fields)
-
-        aoa, reynolds, mach = self.get_params_from_name(self.file_list[idx])
-        aoa = aoa
-        mach_or_reynolds = mach if reynolds is None else reynolds
-
-        norm_aoa = aoa / 10
-        norm_mach_or_reynolds = mach_or_reynolds if reynolds is None else (mach_or_reynolds - 1.5e6) / 1.5e6
-
-        # add physics parameters to graph
-        nodes = np.concatenate([
-            self.nodes,
-            np.repeat(a=norm_aoa, repeats=self.nodes.shape[0])[:,np.newaxis],
-            np.repeat(a=norm_mach_or_reynolds, repeats=self.nodes.shape[0])[:,np.newaxis],
-            self.node_markers
-        ], axis=-1).astype(np.float32)
-
-        # data = MeshGraphData(x=nodes, y=fields, edge_index=self.edges, aoa=aoa, norm_aoa=norm_aoa,
-        #                      mach_or_reynolds=mach_or_reynolds, norm_mach_or_reynolds=norm_mach_or_reynolds)
-        return {'x': nodes, 'y': fields, 'edge_index': self.edges,
-                'aoa': aoa, 'norm_aoa': norm_aoa, 'mach_or_reynolds': mach_or_reynolds,
-                'norm_mach_or_reynolds': norm_mach_or_reynolds,
-                }
+        return self.graphs[idx]
 
     def preprocess(self, tensor_list, stack_output=True):
         # data_means, data_stds = self.normalization_factors
@@ -78,12 +90,6 @@ class MeshAirfoilDataset(Dataset):
             normalized_tensors = np.stack(normalized_tensors, axis=1)
         return normalized_tensors
 
-    def _download(self):
-        pass
-
-    def _process(self):
-        pass
-
     @staticmethod
     def get_params_from_name(filename):
         s = filename.rsplit('.', 1)[0].split('_')
@@ -95,12 +101,11 @@ class MeshAirfoilDataset(Dataset):
 
 
 if __name__ == '__main__':
-    device = paddle.set_device("gpu")
 
     train_data = MeshAirfoilDataset("data/NACA0012_interpolate", mode='train')
     val_data = MeshAirfoilDataset("data/NACA0012_interpolate", mode='test')
 
-    val_loader = DataLoader(val_data, batch_size=2, shuffle=True, num_workers=2)
+    val_loader = Dataloader(train_data, batch_size=2, shuffle=False, num_workers=1)
 
     for i, x in enumerate(val_loader):
         print(i)
