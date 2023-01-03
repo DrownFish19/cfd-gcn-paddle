@@ -46,13 +46,13 @@ class MeshGCN(nn.Layer):
         channels += [out_channels]
 
         self.convs = nn.LayerList()
-        # for i in range(num_layers):
-        #     self.convs.append(GCNConv(channels[i], channels[i + 1]))
+        for i in range(num_layers):
+            self.convs.append(GCNConv(channels[i], channels[i + 1]))
 
-        self.convs.append(GATConv(channels[0], channels[1], num_heads=4))
-        for i in range(1, num_layers - 1):
-            self.convs.append(GATConv(channels[i] * 4, channels[i + 1], num_heads=4))
-        self.convs.append(GATConv(channels[num_layers - 1]*4, channels[num_layers], num_heads=1))
+        # self.convs.append(GATConv(channels[0], channels[1], num_heads=4))
+        # for i in range(1, num_layers - 1):
+        #     self.convs.append(GATConv(channels[i] * 4, channels[i + 1], num_heads=4))
+        # self.convs.append(GATConv(channels[num_layers - 1]*4, channels[num_layers], num_heads=1))
 
     def forward(self, graph, x):
 

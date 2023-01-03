@@ -40,7 +40,7 @@ def parse_args():
                         help='Max number of epochs to train for.')
     parser.add_argument('--optim', default='adam', help='Optimizer.')
     parser.add_argument('--batch-size', '-bs', type=int, default=4)
-    parser.add_argument('--learning-rate', '-lr', dest='lr', type=float, default=5e-5)
+    parser.add_argument('--learning-rate', '-lr', dest='lr', type=float, default=5e-4)
     parser.add_argument('--num-layers', '-nl', type=int, default=3)
     parser.add_argument('--num-end-convs', type=int, default=3)
     parser.add_argument('--hidden-size', '-hs', type=int, default=512)
