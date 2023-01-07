@@ -1,16 +1,12 @@
-import math
-import sys
 from typing import Tuple
 
-import os
+import math
 import paddle
-from common import pad_sequence
-
-import SU2
-from mpi4py import MPI  # Must be imported before pysu2 or else MPI error happens at some point
 import pysu2
+from mpi4py import MPI  # Must be imported before pysu2 or else MPI error happens at some point
 
-from .su2_function_mpi import RunCode, non_busy_post, non_busy_wait, modify_config
+from common import pad_sequence
+from .su2_function_mpi import RunCode, non_busy_post, non_busy_wait
 
 _global_max_ppe = -1
 
@@ -80,6 +76,10 @@ class SU2Function(paddle.autograd.PyLayer):
 
         MPI.COMM_WORLD.bcast(RunCode.RUN_FORWARD, root=0)
         procs_per_example = min(max_ppe, math.ceil(workers / batch_size))
+
+        print("forward tensor", x[0], x[1], x[2], x[3], flush=True)
+        x = tuple([i.numpy() for i in x])
+
         MPI.COMM_WORLD.bcast([num_zones, dims, forward_config, mesh_file, procs_per_example, x], root=0)
 
         # instantiate forward_driver while workers work
@@ -101,7 +101,7 @@ class SU2Function(paddle.autograd.PyLayer):
         for i in range(batch_size):
             output = MPI.COMM_WORLD.recv(source=1 + i * procs_per_example)
             outputs.append(output)
-        outputs = tuple(pad_sequence([o[i] for o in outputs], batch_first=True)
+        outputs = tuple(pad_sequence([paddle.to_tensor(o[i],dtype=paddle.float32) for o in outputs], batch_first=True)
                         for i in range(num_diff_outputs))
         return outputs
 
@@ -111,6 +111,7 @@ class SU2Function(paddle.autograd.PyLayer):
         max_ppe = _global_max_ppe
         workers = MPI.COMM_WORLD.Get_size() - 1
         MPI.COMM_WORLD.bcast(RunCode.RUN_ADJOINT, root=0)
+        grad_outputs = tuple([i.numpy() for i in grad_outputs])
         MPI.COMM_WORLD.bcast(grad_outputs, root=0)
         batch_size = grad_outputs[0].shape[0]
         procs_per_example = min(max_ppe, math.ceil(workers / batch_size))
@@ -119,6 +120,7 @@ class SU2Function(paddle.autograd.PyLayer):
         for i in range(batch_size):
             grad = MPI.COMM_WORLD.recv(source=1 + i * procs_per_example)
             grads.append(grad)
-        grads = tuple(pad_sequence([g[i] for g in grads], batch_first=True)
+        print("grads", len(grads), flush=True)
+        grads = tuple(pad_sequence([paddle.to_tensor(g[i],dtype=paddle.float32) for g in grads], batch_first=True)
                       for i in range(ctx.num_diff_inputs))
-        return grads + (None,) * SU2Function.num_params
+        return tuple([grads[0], grads[1], None, None])  # + (None,) * SU2Function.num_params

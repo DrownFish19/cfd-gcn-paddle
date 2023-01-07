@@ -1,20 +1,22 @@
 import os
-import time
 import shutil
+import time
+import warnings
 from enum import IntEnum
-
-import paddle
-import numpy as np
-from mpi4py import MPI
-
-import SU2
-import pysu2
-import pysu2ad
-
 from typing import Sequence, Union, Tuple, Dict, TypeVar
 
-GenTensor = TypeVar('GenTensor', paddle.Tensor, np.ndarray)
+import SU2
+import numpy as np
+import paddle
+import pysu2
+import pysu2ad
+from mpi4py import MPI
 
+import su2paddle.su2_function
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+GenTensor = TypeVar('GenTensor', paddle.Tensor, np.ndarray)
 
 _non_busy_wait_max_time = 0.1
 
@@ -50,9 +52,9 @@ def run_forward(comm: MPI.Intracomm, forward_driver: pysu2.CSinglezoneDriver,
         array_func = np.array
         cat_func = np.concatenate
     else:
-        import torch
-        array_func = inputs[0].new_tensor
-        cat_func = torch.cat
+        import paddle
+        array_func = paddle.to_tensor(inputs[0])
+        cat_func = paddle.concat
 
     num_diff_outputs = forward_driver.GetnDiff_Outputs()
     outputs = [array_func(forward_driver.GetDiff_Outputs_Vars(i))
@@ -109,9 +111,9 @@ def run_adjoint(comm: MPI.Intracomm, adjoint_driver: pysu2ad.CDiscAdjSinglezoneD
         array_func = np.array
         cat_func = np.concatenate
     else:
-        import torch
-        array_func = inputs[0].new_tensor
-        cat_func = torch.cat
+        import paddle
+        array_func = paddle.to_tensor(inputs[0])
+        cat_func = paddle.concat
 
     num_diff_inputs = adjoint_driver.GetnDiff_Inputs()
     grads = [array_func(adjoint_driver.GetTotal_Sens_Diff_Inputs(i))
@@ -165,11 +167,10 @@ def activate_su2_mpi(remove_temp_files: bool = True, max_procs_per_example: int 
     def stop():
         non_busy_post(MPI.COMM_WORLD)
         MPI.COMM_WORLD.bcast(RunCode.STOP, root=0)
+
     import atexit
     atexit.register(stop)
-
-    import su2_function
-    su2_function._global_max_ppe = max_procs_per_example
+    su2paddle.su2_function._global_max_ppe = max_procs_per_example
 
 
 def non_busy_wait(comm: MPI.Intracomm) -> None:
@@ -210,6 +211,8 @@ def main(remove_temp_files: bool = True) -> None:
                 # disconnect batch_comm from previous run, if it was created
                 batch_comm.Disconnect()
             num_zones, dims, forward_config, mesh_file, procs_per_example, inputs = MPI.COMM_WORLD.bcast(None, root=0)
+            print("214 inputs", inputs, True)
+            # inputs = tuple([paddle.to_tensor(i) for i in inputs])
             batch_size = inputs[0].shape[0]
             batch_index = local_rank // procs_per_example
             if procs_per_example == 1:
@@ -253,7 +256,8 @@ def main(remove_temp_files: bool = True) -> None:
             forward_driver.Postprocessing()
 
         elif run_type == RunCode.RUN_ADJOINT:
-            assert inputs is not None, 'Run forward simulation before running the adjoint.'
+            print("259 inputs", inputs, True)
+            # assert inputs is not None, 'Run forward simulation before running the adjoint.'
             inputs = None
             grad_outputs = MPI.COMM_WORLD.bcast(None, root=0)
             if local_rank >= batch_size * procs_per_example:

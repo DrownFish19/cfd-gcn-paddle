@@ -65,10 +65,10 @@ class MeshAirfoilDataset(Dataset):
                               node_feat={"feature": nodes})
 
             graph.y = fields
-            graph.aoa = aoa
-            graph.norm_aoa = norm_aoa
-            graph.mach_or_reynolds = mach_or_reynolds
-            graph.norm_mach_or_reynolds = norm_mach_or_reynolds
+            graph.aoa = paddle.to_tensor(aoa)
+            graph.norm_aoa = paddle.to_tensor(norm_aoa)
+            graph.mach_or_reynolds = paddle.to_tensor(mach_or_reynolds)
+            graph.norm_mach_or_reynolds = paddle.to_tensor(norm_mach_or_reynolds)
 
             self.graphs.append(graph)
 

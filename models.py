@@ -1,10 +1,9 @@
 import os
-import time
 
 import paddle
 import paddle.nn.functional as F
 from paddle import nn
-from pgl.nn import GCNConv, GATConv
+from pgl.nn import GCNConv
 
 from mesh_utils import write_graph_mesh, quad2tri, get_mesh_graph, signed_dist_graph, is_cw
 from su2paddle import SU2Module
@@ -72,7 +71,7 @@ class MeshGCN(nn.Layer):
 class CFDGCN(nn.Layer):
     def __init__(self, config_file, coarse_mesh, fine_marker_dict, process_sim=lambda x, y: x,
                  freeze_mesh=False, num_convs=6, num_end_convs=3, hidden_channels=512,
-                 out_channels=3, device='cuda'):
+                 out_channels=3):
         super().__init__()
         meshes_temp_dir = 'temp_meshes'
         os.makedirs(meshes_temp_dir, exist_ok=True)
@@ -81,20 +80,22 @@ class CFDGCN(nn.Layer):
         if not coarse_mesh:
             raise ValueError('Need to provide a coarse mesh for CFD-GCN.')
         nodes, edges, self.elems, self.marker_dict = get_mesh_graph(coarse_mesh)
-        self.nodes = paddle.to_tensor(nodes)
         if not freeze_mesh:
-            self.nodes = paddle.create_parameter(self.nodes, dtype=paddle.float32)
+            self.nodes = paddle.to_tensor(nodes, stop_gradient=False)
+        else:
+            self.nodes = paddle.to_tensor(nodes, stop_gradient=True)
+
         self.elems, new_edges = quad2tri(sum(self.elems, []))
         self.elems = [self.elems]
-        self.edges = paddle.to_tensor(edges).to(device)
+        self.edges = paddle.to_tensor(edges)
         print(self.edges.dtype, new_edges.dtype)
-        self.edges = paddle.concat([self.edges, new_edges.to(self.edges.device)], axis=1)
+        self.edges = paddle.concat([self.edges, new_edges], axis=1)
         self.marker_inds = paddle.to_tensor(sum(self.marker_dict.values(), [])).unique()
-        assert is_cw(self.nodes, self.elems[0]).nonzero().shape[0] == 0, 'Mesh has flipped elems'
+        assert is_cw(self.nodes, paddle.to_tensor(self.elems[0])).nonzero().shape[0] == 0, 'Mesh has flipped elems'
 
         self.process_sim = process_sim
         self.su2 = SU2Module(config_file, mesh_file=self.mesh_file)
-        logging.info(f'Mesh filename: {self.mesh_file.format(batch_index="*")}')
+        print(f'Mesh filename: {self.mesh_file.format(batch_index="*")}', flush=True)
 
         self.fine_marker_dict = paddle.to_tensor(fine_marker_dict['airfoil']).unique()
         self.sdf = None
@@ -121,57 +122,71 @@ class CFDGCN(nn.Layer):
 
         self.sim_info = {}  # store output of coarse simulation for logging / debugging
 
-    def forward(self, batch):
-        start = time.time()
-        batch_size = batch['aoa'].shape[0]
+    def forward(self, graph, x):
+        batch_size = graph.aoa.shape[0]
 
         if self.sdf is None:
             with paddle.no_grad():
-                self.sdf = signed_dist_graph(batch.x[batch.batch == 0, :2],
-                                             self.fine_marker_dict).unsqueeze(1)
-        fine_x = paddle.concat([batch.x, self.sdf.repeat(batch_size, 1)], axis=1)
+                self.sdf = signed_dist_graph(x[:, :2], self.fine_marker_dict).unsqueeze(1)
+        fine_x = paddle.concat([x, self.sdf], axis=1)
 
         for i, conv in enumerate(self.pre_convs):
-            fine_x = F.relu(conv(fine_x, batch.edge_index))
+            fine_x = F.relu(conv(graph, fine_x))
 
-        nodes = self.get_nodes()
-        num_nodes = nodes.shape[0]
+        nodes = self.get_nodes()  # [353,2]
         self.write_mesh_file(nodes, self.elems, self.marker_dict, filename=self.mesh_file)
 
-        params = paddle.stack([batch['aoa'], batch['mach_or_reynolds']], axis=1)
-        batch_aoa = params[:, 0].to('cpu', non_blocking=True)
-        batch_mach_or_reynolds = params[:, 1].to('cpu', non_blocking=True)
-
-        batch_x = nodes.unsqueeze(0).expand(batch_size, -1, -1).cpu()
-        batch_y = self.su2(batch_x[..., 0], batch_x[..., 1],
-                           batch_aoa[..., None], batch_mach_or_reynolds[..., None])
-        batch_y = [y.to(batch.x.device) for y in batch_y]
+        print("nodes[None, ..., 0]", nodes[None, ..., 0].shape, flush=True)
+        print("nodes[None, ..., 1]", nodes[None, ..., 1].shape, flush=True)
+        print("graph.aoa[..., None]", graph.aoa[..., None].shape, flush=True)
+        print("graph.mach_or_reynolds[..., None]", graph.mach_or_reynolds[..., None].shape,
+              flush=True)
+        batch_y = self.su2(nodes[None, ..., 0], nodes[None, ..., 1],
+                           graph.aoa[..., None], graph.mach_or_reynolds[..., None])
         batch_y = self.process_sim(batch_y, False)
 
-        coarse_y = paddle.stack([y.flatten() for y in batch_y], axis=1)
-        coarse_x = nodes.repeat(batch_size, 1)[:, :2]
-        zeros = batch.batch.new_zeros(num_nodes)
-        coarse_batch = paddle.concat([zeros + i for i in range(batch_size)])
+        coarse_y = paddle.stack([y.flatten() for y in batch_y], axis=1).astype("float32")  # features
+        # print("coarse_y", coarse_y, flush=True)
+        # print("coarse_y.shape", coarse_y.shape, flush=True)
+        # print("nodes[:, :2]", nodes[:, :2], flush=True)
+        # print("x[:, :2]", x[:, :2], flush=True)
 
-        fine_y = self.upsample(coarse_y, coarse_x, coarse_batch, batch)
+        fine_y = self.upsample(features=coarse_y, coarse_nodes=nodes[:, :2], fine_nodes=x[:, :2])
         fine_y = paddle.concat([fine_y, fine_x], axis=1)
 
         for i, conv in enumerate(self.convs[:-1]):
-            fine_y = F.relu(conv(fine_y, batch.edge_index))
-        fine_y = self.convs[-1](fine_y, batch.edge_index)
+            fine_y = F.relu(conv(graph, fine_y))
+        fine_y = self.convs[-1](graph, fine_y)
 
-        self.sim_info['nodes'] = coarse_x[:, :2]
+        self.sim_info['nodes'] = nodes[:, :2]
         self.sim_info['elems'] = [self.elems] * batch_size
-        self.sim_info['batch'] = coarse_batch
+        self.sim_info['batch'] = graph
         self.sim_info['output'] = coarse_y
 
         return fine_y
 
-    def upsample(self, y, coarse_nodes, coarse_batch, fine):
-        fine_nodes = fine.x[:, :2]
-        y = knn_interpolate(y.cpu(), coarse_nodes[:, :2].cpu(), fine_nodes.cpu(),
-                            coarse_batch.cpu(), fine.batch.cpu(), k=3).to(y.device)
-        return y
+    def upsample(self, features, coarse_nodes, fine_nodes):
+        """
+
+        :param features: [353，3]
+        :param coarse_nodes: [353, 2]
+        :param fine_nodes: [6684, 2]
+        :return:
+        """
+        coarse_nodes_input = paddle.repeat_interleave(coarse_nodes.unsqueeze(0), fine_nodes.shape[0], 0)  # [6684,352,2]
+        fine_nodes_input = paddle.repeat_interleave(fine_nodes.unsqueeze(1), coarse_nodes.shape[0], 1)  # [6684,352,2]
+
+        dist_w = 1.0 / (paddle.norm(x=coarse_nodes_input - fine_nodes_input, p=2, axis=-1) + 1e-9)  # [6684,352]
+        knn_value, knn_index = paddle.topk(dist_w, k=3, largest=True)  # [6684,3],[6684,3]
+
+        weight = knn_value.unsqueeze(-2)
+        features_input = features[knn_index]
+
+        output = paddle.bmm(weight, features_input).squeeze(-2) / paddle.sum(knn_value, axis=-1, keepdim=True)
+
+        # y = knn_interpolate(y.cpu(), coarse_nodes[:, :2].cpu(), fine_nodes.cpu(),
+        #                     coarse_batch.cpu(), fine.batch.cpu(), k=3)
+        return output
 
     def get_nodes(self):
         # return torch.cat([self.marker_nodes, self.not_marker_nodes])

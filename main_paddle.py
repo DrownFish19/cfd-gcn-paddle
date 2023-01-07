@@ -1,7 +1,9 @@
 import os
 import sys
+import warnings
 from argparse import ArgumentParser
 
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 import numpy as np
 
 os.environ['SU2_RUN'] = '/root/autodl-tmp/SU2_bin'
@@ -19,7 +21,77 @@ from mesh_utils import plot_field, is_ccw
 from data import MeshAirfoilDataset
 from models import CFDGCN, MeshGCN, UCM, CFD
 
+from su2paddle import activate_su2_mpi
 
+
+# GCN
+# def parse_args():
+#     parser = ArgumentParser()
+#     parser.add_argument('--exp-name', '-e', default='gcn_interp',
+#                         help='Experiment name, defaults to model name.')
+#     parser.add_argument('--su2-config', '-sc', default='coarse.cfg')
+#     parser.add_argument('--data-dir', '-d', default='data/NACA0012_interpolate',
+#                         help='Directory with dataset.')
+#     parser.add_argument('--coarse-mesh', default='meshes/mesh_NACA0012_xcoarse.su2',
+#                         help='Path to coarse mesh (required for CFD-GCN).')
+#     parser.add_argument('--version', type=int, default=None,
+#                         help='If specified log version doesnt exist, create it.'
+#                              ' If it exists, continue from where it stopped.')
+#     parser.add_argument('--load-model', '-lm', default='', help='Load previously trained model.')
+#
+#     parser.add_argument('--model', '-m', default='gcn',
+#                         help='Which model to use.')
+#     parser.add_argument('--max-epochs', '-me', type=int, default=1000,
+#                         help='Max number of epochs to train for.')
+#     parser.add_argument('--optim', default='adam', help='Optimizer.')
+#     parser.add_argument('--batch-size', '-bs', type=int, default=4)
+#     parser.add_argument('--learning-rate', '-lr', dest='lr', type=float, default=5e-4)
+#     parser.add_argument('--num-layers', '-nl', type=int, default=3)
+#     parser.add_argument('--num-end-convs', type=int, default=3)
+#     parser.add_argument('--hidden-size', '-hs', type=int, default=512)
+#     parser.add_argument('--freeze-mesh', action='store_true',
+#                         help='Do not do any learning on the mesh.')
+#
+#     parser.add_argument('--eval', action='store_true',
+#                         help='Skips training, does only eval.')
+#     parser.add_argument('--profile', action='store_true',
+#                         help='Run profiler.')
+#     parser.add_argument('--seed', type=int, default=0,
+#                         help='Random seed')
+#     parser.add_argument('--gpus', type=int, default=1,
+#                         help='Number of gpus to use, 0 for none.')
+#     parser.add_argument('--dataloader-workers', '-dw', type=int, default=2,
+#                         help='Number of Pytorch Dataloader workers to use.')
+#     parser.add_argument('--train-val-split', '-tvs', type=float, default=0.9,
+#                         help='Percentage of training set to use for training.')
+#     parser.add_argument('--val-check-interval', '-vci', type=int, default=None,
+#                         help='Run validation every N batches, '
+#                              'defaults to once every epoch.')
+#     parser.add_argument('--early-stop-patience', '-esp', type=int, default=0,
+#                         help='Patience before early stopping. '
+#                              'Does not early stop by default.')
+#     parser.add_argument('--train-pct', type=float, default=1.0,
+#                         help='Run on a reduced percentage of the training set,'
+#                              ' defaults to running with full data.')
+#     parser.add_argument('--verbose', type=int, default=1, choices=[0, 1],
+#                         help='Verbosity level. Defaults to 1, 0 for quiet.')
+#     parser.add_argument('--debug', action='store_true',
+#                         help='Run in debug mode. Doesnt write logs. Runs '
+#                              'a single iteration of training and validation.')
+#     parser.add_argument('--no-log', action='store_true',
+#                         help='Dont save any logs or checkpoints.')
+#
+#     args = parser.parse_args()
+#     args.nodename = os.uname().nodename
+#     if args.exp_name == '':
+#         args.exp_name = args.model
+#     if args.val_check_interval is None:
+#         args.val_check_interval = 1.0
+#     args.distributed_backend = 'dp'
+#
+#     return args
+
+# CFDGCN
 def parse_args():
     parser = ArgumentParser()
     parser.add_argument('--exp-name', '-e', default='gcn_interp',
@@ -34,14 +106,14 @@ def parse_args():
                              ' If it exists, continue from where it stopped.')
     parser.add_argument('--load-model', '-lm', default='', help='Load previously trained model.')
 
-    parser.add_argument('--model', '-m', default='gcn',
+    parser.add_argument('--model', '-m', default='cfd_gcn',
                         help='Which model to use.')
     parser.add_argument('--max-epochs', '-me', type=int, default=1000,
                         help='Max number of epochs to train for.')
     parser.add_argument('--optim', default='adam', help='Optimizer.')
     parser.add_argument('--batch-size', '-bs', type=int, default=4)
     parser.add_argument('--learning-rate', '-lr', dest='lr', type=float, default=5e-4)
-    parser.add_argument('--num-layers', '-nl', type=int, default=3)
+    parser.add_argument('--num-layers', '-nl', type=int, default=6)
     parser.add_argument('--num-end-convs', type=int, default=3)
     parser.add_argument('--hidden-size', '-hs', type=int, default=512)
     parser.add_argument('--freeze-mesh', action='store_true',
@@ -121,8 +193,7 @@ class PaddleWrapper:
                                 num_end_convs=self.hparams.num_end_convs,
                                 out_channels=out_channels,
                                 process_sim=self.data.preprocess,
-                                freeze_mesh=self.hparams.freeze_mesh,
-                                device='cuda' if self.hparams.gpus > 0 else 'cpu')
+                                freeze_mesh=self.hparams.freeze_mesh)
         elif hparams.model == 'gcn':
             self.model = MeshGCN(in_channels,
                                  hidden_channels,
@@ -134,15 +205,13 @@ class PaddleWrapper:
                              self.hparams.coarse_mesh,
                              fine_marker_dict=self.data.marker_dict,
                              process_sim=self.data.preprocess,
-                             freeze_mesh=self.hparams.freeze_mesh,
-                             device='cuda' if self.hparams.gpus > 0 else 'cpu')
+                             freeze_mesh=self.hparams.freeze_mesh)
         elif hparams.model == 'cfd':
             self.model = CFD(hparams.su2_config,
                              self.hparams.coarse_mesh,
                              fine_marker_dict=self.data.marker_dict,
                              process_sim=self.data.preprocess,
-                             freeze_mesh=self.hparams.freeze_mesh,
-                             device='cuda' if self.hparams.gpus > 0 else 'cpu')
+                             freeze_mesh=self.hparams.freeze_mesh)
         else:
             raise NotImplementedError
 
@@ -211,8 +280,8 @@ class PaddleWrapper:
         loss, pred = self.common_step(batch)
 
         # if batch_idx == 0:
-            # log images only once per val epoch
-            # self.log_images(batch.x[:, :2], pred, batch.y, batch.batch, self.data.elems_list, 'val')
+        # log images only once per val epoch
+        # self.log_images(batch.x[:, :2], pred, batch.y, batch.batch, self.data.elems_list, 'val')
 
         print("batch_val_loss:{}".format(loss.item()), flush=True)
 
@@ -308,8 +377,8 @@ class PaddleWrapper:
 
 
 if __name__ == '__main__':
-    paddle.set_device("gpu")
-    # activate_su2_mpi(remove_temp_files=True)
+    paddle.set_device("cpu")
+    activate_su2_mpi(remove_temp_files=True)
 
     args = parse_args()
     print(args, file=sys.stderr)
@@ -341,5 +410,3 @@ if __name__ == '__main__':
             total_test_loss.append(test_loss)
         mean_test_loss = np.stack(total_test_loss).mean()
         print("test_loss (mean):{}".format(mean_test_loss), flush=True)
-
-
