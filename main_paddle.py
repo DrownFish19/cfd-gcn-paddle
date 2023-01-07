@@ -30,138 +30,71 @@ logger = logging.getLogger(__name__)
 
 
 # GCN
-# def parse_args():
-#     parser = ArgumentParser()
-#     parser.add_argument('--exp-name', '-e', default='gcn_interp',
-#                         help='Experiment name, defaults to model name.')
-#     parser.add_argument('--su2-config', '-sc', default='coarse.cfg')
-#     parser.add_argument('--data-dir', '-d', default='data/NACA0012_interpolate',
-#                         help='Directory with dataset.')
-#     parser.add_argument('--coarse-mesh', default='meshes/mesh_NACA0012_xcoarse.su2',
-#                         help='Path to coarse mesh (required for CFD-GCN).')
-#     parser.add_argument('--version', type=int, default=None,
-#                         help='If specified log version doesnt exist, create it.'
-#                              ' If it exists, continue from where it stopped.')
-#     parser.add_argument('--load-model', '-lm', default='', help='Load previously trained model.')
-#
-#     parser.add_argument('--model', '-m', default='gcn',
-#                         help='Which model to use.')
-#     parser.add_argument('--max-epochs', '-me', type=int, default=1000,
-#                         help='Max number of epochs to train for.')
-#     parser.add_argument('--optim', default='adam', help='Optimizer.')
-#     parser.add_argument('--batch-size', '-bs', type=int, default=4)
-#     parser.add_argument('--learning-rate', '-lr', dest='lr', type=float, default=5e-4)
-#     parser.add_argument('--num-layers', '-nl', type=int, default=3)
-#     parser.add_argument('--num-end-convs', type=int, default=3)
-#     parser.add_argument('--hidden-size', '-hs', type=int, default=512)
-#     parser.add_argument('--freeze-mesh', action='store_true',
-#                         help='Do not do any learning on the mesh.')
-#
-#     parser.add_argument('--eval', action='store_true',
-#                         help='Skips training, does only eval.')
-#     parser.add_argument('--profile', action='store_true',
-#                         help='Run profiler.')
-#     parser.add_argument('--seed', type=int, default=0,
-#                         help='Random seed')
-#     parser.add_argument('--gpus', type=int, default=1,
-#                         help='Number of gpus to use, 0 for none.')
-#     parser.add_argument('--dataloader-workers', '-dw', type=int, default=2,
-#                         help='Number of Pytorch Dataloader workers to use.')
-#     parser.add_argument('--train-val-split', '-tvs', type=float, default=0.9,
-#                         help='Percentage of training set to use for training.')
-#     parser.add_argument('--val-check-interval', '-vci', type=int, default=None,
-#                         help='Run validation every N batches, '
-#                              'defaults to once every epoch.')
-#     parser.add_argument('--early-stop-patience', '-esp', type=int, default=0,
-#                         help='Patience before early stopping. '
-#                              'Does not early stop by default.')
-#     parser.add_argument('--train-pct', type=float, default=1.0,
-#                         help='Run on a reduced percentage of the training set,'
-#                              ' defaults to running with full data.')
-#     parser.add_argument('--verbose', type=int, default=1, choices=[0, 1],
-#                         help='Verbosity level. Defaults to 1, 0 for quiet.')
-#     parser.add_argument('--debug', action='store_true',
-#                         help='Run in debug mode. Doesnt write logs. Runs '
-#                              'a single iteration of training and validation.')
-#     parser.add_argument('--no-log', action='store_true',
-#                         help='Dont save any logs or checkpoints.')
-#
-#     args = parser.parse_args()
-#     args.nodename = os.uname().nodename
-#     if args.exp_name == '':
-#         args.exp_name = args.model
-#     if args.val_check_interval is None:
-#         args.val_check_interval = 1.0
-#     args.distributed_backend = 'dp'
-#
-#     return args
+def parse_args():
+    parser = ArgumentParser()
+    parser.add_argument('--exp-name', '-e', default='gcn_interp',
+                        help='Experiment name, defaults to model name.')
+    parser.add_argument('--su2-config', '-sc', default='coarse.cfg')
+    parser.add_argument('--data-dir', '-d', default='data/NACA0012_interpolate',
+                        help='Directory with dataset.')
+    parser.add_argument('--coarse-mesh', default='meshes/mesh_NACA0012_xcoarse.su2',
+                        help='Path to coarse mesh (required for CFD-GCN).')
+    parser.add_argument('--version', type=int, default=None,
+                        help='If specified log version doesnt exist, create it.'
+                             ' If it exists, continue from where it stopped.')
+    parser.add_argument('--load-model', '-lm', default='', help='Load previously trained model.')
 
-# CFDGCN
-# def parse_args():
-#     parser = ArgumentParser()
-#     parser.add_argument('--exp-name', '-e', default='gcn_interp',
-#                         help='Experiment name, defaults to model name.')
-#     parser.add_argument('--su2-config', '-sc', default='coarse.cfg')
-#     parser.add_argument('--data-dir', '-d', default='data/NACA0012_interpolate',
-#                         help='Directory with dataset.')
-#     parser.add_argument('--coarse-mesh', default='meshes/mesh_NACA0012_xcoarse.su2',
-#                         help='Path to coarse mesh (required for CFD-GCN).')
-#     parser.add_argument('--version', type=int, default=None,
-#                         help='If specified log version doesnt exist, create it.'
-#                              ' If it exists, continue from where it stopped.')
-#     parser.add_argument('--load-model', '-lm', default='', help='Load previously trained model.')
-#
-#     parser.add_argument('--model', '-m', default='cfd_gcn',
-#                         help='Which model to use.')
-#     parser.add_argument('--max-epochs', '-me', type=int, default=1000,
-#                         help='Max number of epochs to train for.')
-#     parser.add_argument('--optim', default='adam', help='Optimizer.')
-#     parser.add_argument('--batch-size', '-bs', type=int, default=4)
-#     parser.add_argument('--learning-rate', '-lr', dest='lr', type=float, default=5e-4)
-#     parser.add_argument('--num-layers', '-nl', type=int, default=6)
-#     parser.add_argument('--num-end-convs', type=int, default=3)
-#     parser.add_argument('--hidden-size', '-hs', type=int, default=512)
-#     parser.add_argument('--freeze-mesh', action='store_true',
-#                         help='Do not do any learning on the mesh.')
-#
-#     parser.add_argument('--eval', action='store_true',
-#                         help='Skips training, does only eval.')
-#     parser.add_argument('--profile', action='store_true',
-#                         help='Run profiler.')
-#     parser.add_argument('--seed', type=int, default=0,
-#                         help='Random seed')
-#     parser.add_argument('--gpus', type=int, default=1,
-#                         help='Number of gpus to use, 0 for none.')
-#     parser.add_argument('--dataloader-workers', '-dw', type=int, default=2,
-#                         help='Number of Pytorch Dataloader workers to use.')
-#     parser.add_argument('--train-val-split', '-tvs', type=float, default=0.9,
-#                         help='Percentage of training set to use for training.')
-#     parser.add_argument('--val-check-interval', '-vci', type=int, default=None,
-#                         help='Run validation every N batches, '
-#                              'defaults to once every epoch.')
-#     parser.add_argument('--early-stop-patience', '-esp', type=int, default=0,
-#                         help='Patience before early stopping. '
-#                              'Does not early stop by default.')
-#     parser.add_argument('--train-pct', type=float, default=1.0,
-#                         help='Run on a reduced percentage of the training set,'
-#                              ' defaults to running with full data.')
-#     parser.add_argument('--verbose', type=int, default=1, choices=[0, 1],
-#                         help='Verbosity level. Defaults to 1, 0 for quiet.')
-#     parser.add_argument('--debug', action='store_true',
-#                         help='Run in debug mode. Doesnt write logs. Runs '
-#                              'a single iteration of training and validation.')
-#     parser.add_argument('--no-log', action='store_true',
-#                         help='Dont save any logs or checkpoints.')
-#
-#     args = parser.parse_args()
-#     args.nodename = os.uname().nodename
-#     if args.exp_name == '':
-#         args.exp_name = args.model
-#     if args.val_check_interval is None:
-#         args.val_check_interval = 1.0
-#     args.distributed_backend = 'dp'
-#
-#     return args
+    parser.add_argument('--model', '-m', default='gcn',
+                        help='Which model to use.')
+    parser.add_argument('--max-epochs', '-me', type=int, default=1000,
+                        help='Max number of epochs to train for.')
+    parser.add_argument('--optim', default='adam', help='Optimizer.')
+    parser.add_argument('--batch-size', '-bs', type=int, default=4)
+    parser.add_argument('--learning-rate', '-lr', dest='lr', type=float, default=5e-4)
+    parser.add_argument('--num-layers', '-nl', type=int, default=3)
+    parser.add_argument('--num-end-convs', type=int, default=3)
+    parser.add_argument('--hidden-size', '-hs', type=int, default=512)
+    parser.add_argument('--freeze-mesh', action='store_true',
+                        help='Do not do any learning on the mesh.')
+
+    parser.add_argument('--eval', action='store_true',
+                        help='Skips training, does only eval.')
+    parser.add_argument('--profile', action='store_true',
+                        help='Run profiler.')
+    parser.add_argument('--seed', type=int, default=0,
+                        help='Random seed')
+    parser.add_argument('--gpus', type=int, default=1,
+                        help='Number of gpus to use, 0 for none.')
+    parser.add_argument('--dataloader-workers', '-dw', type=int, default=2,
+                        help='Number of Pytorch Dataloader workers to use.')
+    parser.add_argument('--train-val-split', '-tvs', type=float, default=0.9,
+                        help='Percentage of training set to use for training.')
+    parser.add_argument('--val-check-interval', '-vci', type=int, default=None,
+                        help='Run validation every N batches, '
+                             'defaults to once every epoch.')
+    parser.add_argument('--early-stop-patience', '-esp', type=int, default=0,
+                        help='Patience before early stopping. '
+                             'Does not early stop by default.')
+    parser.add_argument('--train-pct', type=float, default=1.0,
+                        help='Run on a reduced percentage of the training set,'
+                             ' defaults to running with full data.')
+    parser.add_argument('--verbose', type=int, default=1, choices=[0, 1],
+                        help='Verbosity level. Defaults to 1, 0 for quiet.')
+    parser.add_argument('--debug', action='store_true',
+                        help='Run in debug mode. Doesnt write logs. Runs '
+                             'a single iteration of training and validation.')
+    parser.add_argument('--no-log', action='store_true',
+                        help='Dont save any logs or checkpoints.')
+
+    args = parser.parse_args()
+    args.nodename = os.uname().nodename
+    if args.exp_name == '':
+        args.exp_name = args.model
+    if args.val_check_interval is None:
+        args.val_check_interval = 1.0
+    args.distributed_backend = 'dp'
+
+    return args
 
 
 def collate_fn(batch_data):
