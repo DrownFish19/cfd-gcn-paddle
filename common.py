@@ -1,9 +1,11 @@
+import pathlib
 import warnings
-from typing import Union, Optional, List, Tuple
+from typing import Union, Optional, List, Tuple, Text, BinaryIO
 
 import math
 import matplotlib.pyplot as plt
 import paddle
+from PIL import Image
 
 plt.switch_backend('agg')
 
@@ -143,3 +145,13 @@ def make_grid(tensor: Union[paddle.Tensor, List[paddle.Tensor]], nrow: int = 8, 
             grid[:, y * height + padding:(y + 1) * height, x * width + padding:(x + 1) * width] = tensor[k]
             k = k + 1
     return grid
+
+
+@paddle.no_grad()
+def save_image(tensor: Union[paddle.Tensor, List[paddle.Tensor]], fp: Union[Text, pathlib.Path, BinaryIO],
+               format: Optional[str] = None,
+               **kwargs) -> None:
+    grid = make_grid(tensor, **kwargs)
+    ndarr = paddle.clip(grid * 255 + 0.5, 0, 255).cast("uint8").numpy()
+    im = Image.fromarray(ndarr)
+    im.save(fp, format=format)

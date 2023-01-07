@@ -1,7 +1,10 @@
+import logging
 import os
 import sys
 import warnings
 from argparse import ArgumentParser
+
+from PIL import Image
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 import numpy as np
@@ -10,18 +13,20 @@ os.environ['SU2_RUN'] = '/root/autodl-tmp/SU2_bin'
 sys.path.append('/root/autodl-tmp/SU2_bin')
 
 import paddle
-# from paddle.io import DataLoader
 from pgl.utils.data.dataloader import Dataloader
 from paddle import nn, optimizer
-from common import make_grid
-from paddle import to_tensor
 
 from mesh_utils import plot_field, is_ccw
-# from su2paddle import activate_su2_mpi
 from data import MeshAirfoilDataset
 from models import CFDGCN, MeshGCN, UCM, CFD
 
 from su2paddle import activate_su2_mpi
+
+logging.basicConfig(level=logging.DEBUG,
+                    filename='output.log',
+                    datefmt='%Y/%m/%d %H:%M:%S',
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(lineno)d - %(module)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 # GCN
@@ -92,71 +97,71 @@ from su2paddle import activate_su2_mpi
 #     return args
 
 # CFDGCN
-def parse_args():
-    parser = ArgumentParser()
-    parser.add_argument('--exp-name', '-e', default='gcn_interp',
-                        help='Experiment name, defaults to model name.')
-    parser.add_argument('--su2-config', '-sc', default='coarse.cfg')
-    parser.add_argument('--data-dir', '-d', default='data/NACA0012_interpolate',
-                        help='Directory with dataset.')
-    parser.add_argument('--coarse-mesh', default='meshes/mesh_NACA0012_xcoarse.su2',
-                        help='Path to coarse mesh (required for CFD-GCN).')
-    parser.add_argument('--version', type=int, default=None,
-                        help='If specified log version doesnt exist, create it.'
-                             ' If it exists, continue from where it stopped.')
-    parser.add_argument('--load-model', '-lm', default='', help='Load previously trained model.')
-
-    parser.add_argument('--model', '-m', default='cfd_gcn',
-                        help='Which model to use.')
-    parser.add_argument('--max-epochs', '-me', type=int, default=1000,
-                        help='Max number of epochs to train for.')
-    parser.add_argument('--optim', default='adam', help='Optimizer.')
-    parser.add_argument('--batch-size', '-bs', type=int, default=4)
-    parser.add_argument('--learning-rate', '-lr', dest='lr', type=float, default=5e-4)
-    parser.add_argument('--num-layers', '-nl', type=int, default=6)
-    parser.add_argument('--num-end-convs', type=int, default=3)
-    parser.add_argument('--hidden-size', '-hs', type=int, default=512)
-    parser.add_argument('--freeze-mesh', action='store_true',
-                        help='Do not do any learning on the mesh.')
-
-    parser.add_argument('--eval', action='store_true',
-                        help='Skips training, does only eval.')
-    parser.add_argument('--profile', action='store_true',
-                        help='Run profiler.')
-    parser.add_argument('--seed', type=int, default=0,
-                        help='Random seed')
-    parser.add_argument('--gpus', type=int, default=1,
-                        help='Number of gpus to use, 0 for none.')
-    parser.add_argument('--dataloader-workers', '-dw', type=int, default=2,
-                        help='Number of Pytorch Dataloader workers to use.')
-    parser.add_argument('--train-val-split', '-tvs', type=float, default=0.9,
-                        help='Percentage of training set to use for training.')
-    parser.add_argument('--val-check-interval', '-vci', type=int, default=None,
-                        help='Run validation every N batches, '
-                             'defaults to once every epoch.')
-    parser.add_argument('--early-stop-patience', '-esp', type=int, default=0,
-                        help='Patience before early stopping. '
-                             'Does not early stop by default.')
-    parser.add_argument('--train-pct', type=float, default=1.0,
-                        help='Run on a reduced percentage of the training set,'
-                             ' defaults to running with full data.')
-    parser.add_argument('--verbose', type=int, default=1, choices=[0, 1],
-                        help='Verbosity level. Defaults to 1, 0 for quiet.')
-    parser.add_argument('--debug', action='store_true',
-                        help='Run in debug mode. Doesnt write logs. Runs '
-                             'a single iteration of training and validation.')
-    parser.add_argument('--no-log', action='store_true',
-                        help='Dont save any logs or checkpoints.')
-
-    args = parser.parse_args()
-    args.nodename = os.uname().nodename
-    if args.exp_name == '':
-        args.exp_name = args.model
-    if args.val_check_interval is None:
-        args.val_check_interval = 1.0
-    args.distributed_backend = 'dp'
-
-    return args
+# def parse_args():
+#     parser = ArgumentParser()
+#     parser.add_argument('--exp-name', '-e', default='gcn_interp',
+#                         help='Experiment name, defaults to model name.')
+#     parser.add_argument('--su2-config', '-sc', default='coarse.cfg')
+#     parser.add_argument('--data-dir', '-d', default='data/NACA0012_interpolate',
+#                         help='Directory with dataset.')
+#     parser.add_argument('--coarse-mesh', default='meshes/mesh_NACA0012_xcoarse.su2',
+#                         help='Path to coarse mesh (required for CFD-GCN).')
+#     parser.add_argument('--version', type=int, default=None,
+#                         help='If specified log version doesnt exist, create it.'
+#                              ' If it exists, continue from where it stopped.')
+#     parser.add_argument('--load-model', '-lm', default='', help='Load previously trained model.')
+#
+#     parser.add_argument('--model', '-m', default='cfd_gcn',
+#                         help='Which model to use.')
+#     parser.add_argument('--max-epochs', '-me', type=int, default=1000,
+#                         help='Max number of epochs to train for.')
+#     parser.add_argument('--optim', default='adam', help='Optimizer.')
+#     parser.add_argument('--batch-size', '-bs', type=int, default=4)
+#     parser.add_argument('--learning-rate', '-lr', dest='lr', type=float, default=5e-4)
+#     parser.add_argument('--num-layers', '-nl', type=int, default=6)
+#     parser.add_argument('--num-end-convs', type=int, default=3)
+#     parser.add_argument('--hidden-size', '-hs', type=int, default=512)
+#     parser.add_argument('--freeze-mesh', action='store_true',
+#                         help='Do not do any learning on the mesh.')
+#
+#     parser.add_argument('--eval', action='store_true',
+#                         help='Skips training, does only eval.')
+#     parser.add_argument('--profile', action='store_true',
+#                         help='Run profiler.')
+#     parser.add_argument('--seed', type=int, default=0,
+#                         help='Random seed')
+#     parser.add_argument('--gpus', type=int, default=1,
+#                         help='Number of gpus to use, 0 for none.')
+#     parser.add_argument('--dataloader-workers', '-dw', type=int, default=2,
+#                         help='Number of Pytorch Dataloader workers to use.')
+#     parser.add_argument('--train-val-split', '-tvs', type=float, default=0.9,
+#                         help='Percentage of training set to use for training.')
+#     parser.add_argument('--val-check-interval', '-vci', type=int, default=None,
+#                         help='Run validation every N batches, '
+#                              'defaults to once every epoch.')
+#     parser.add_argument('--early-stop-patience', '-esp', type=int, default=0,
+#                         help='Patience before early stopping. '
+#                              'Does not early stop by default.')
+#     parser.add_argument('--train-pct', type=float, default=1.0,
+#                         help='Run on a reduced percentage of the training set,'
+#                              ' defaults to running with full data.')
+#     parser.add_argument('--verbose', type=int, default=1, choices=[0, 1],
+#                         help='Verbosity level. Defaults to 1, 0 for quiet.')
+#     parser.add_argument('--debug', action='store_true',
+#                         help='Run in debug mode. Doesnt write logs. Runs '
+#                              'a single iteration of training and validation.')
+#     parser.add_argument('--no-log', action='store_true',
+#                         help='Dont save any logs or checkpoints.')
+#
+#     args = parser.parse_args()
+#     args.nodename = os.uname().nodename
+#     if args.exp_name == '':
+#         args.exp_name = args.model
+#     if args.val_check_interval is None:
+#         args.val_check_interval = 1.0
+#     args.distributed_backend = 'dp'
+#
+#     return args
 
 
 def collate_fn(batch_data):
@@ -251,11 +256,12 @@ class PaddleWrapper:
         for graph in graphs:
             true_field = graph.y
             pred_field = self.model(graph, paddle.to_tensor(graph.node_feat["feature"]))
+            pred_fields.append(pred_field)
+
             mse_loss = self.criterion(pred_field, true_field)
             loss += mse_loss
 
         loss = loss / len(graphs)
-        # pred_fields = paddle.stack(pred_fields)
         self.global_step += 1
 
         return loss, pred_fields
@@ -263,14 +269,14 @@ class PaddleWrapper:
     def training_step(self, batch, batch_idx):
         loss, pred = self.common_step(batch)
 
-        # if batch_idx + 1 == self.trainer.val_check_batch:
-        #     # log images when doing val check
-        #     self.log_images(batch.x[:, :2], pred, batch.y, batch.batch,
-        #                     self.data.elems_list, 'train')
+        if batch_idx == 0:
+            # log images when doing val check
+            self.log_images(batch[0].node_feat["feature"][:, :2], pred[0], batch[0].y, self.data.elems_list, 'train')
 
         self.sum_loss += loss.item()
 
         print("batch_train_loss:{}".format(loss.item()), flush=True)
+        logger.info("batch_train_loss:{}".format(loss.item()))
 
         loss.backward()
         self.optimizer.step()
@@ -279,9 +285,8 @@ class PaddleWrapper:
     def validation_step(self, batch, batch_idx):
         loss, pred = self.common_step(batch)
 
-        # if batch_idx == 0:
-        # log images only once per val epoch
-        # self.log_images(batch.x[:, :2], pred, batch.y, batch.batch, self.data.elems_list, 'val')
+        if batch_idx == 0:
+            self.log_images(batch[0].node_feat["feature"][:, :2], pred[0], batch[0].y, self.data.elems_list, 'val')
 
         print("batch_val_loss:{}".format(loss.item()), flush=True)
 
@@ -292,8 +297,9 @@ class PaddleWrapper:
 
         # batch_size = batch.batch.max()
         self.step = 0 if self.step is None else self.step
-        # for i in range(batch_size):
-        #     self.log_images(batch.x[:, :2], pred, batch.y, batch.batch, self.data.elems_list, 'test', log_idx=i)
+        for i in range(len(pred)):
+            self.log_images(batch[i].node_feat["feature"][:, :2], pred[i], batch[i].y, self.data.elems_list, 'test',
+                            i)
         self.step += 1
 
         return loss.item()
@@ -329,45 +335,20 @@ class PaddleWrapper:
             print(f'Test data: {len(self.test_data)} examples, 'f'{len(test_loader)} batches.', flush=True)
         return test_loader
 
-    def log_images(self, nodes, pred, true, batch, elems_list, mode, log_idx=0):
-        # if self.hparams.no_log or self.logger.debug:
-        #     return
-
-        inds = batch == log_idx
-        nodes = nodes[inds]
-        pred = pred[inds]
-        true = true[inds]
-
-        # exp = self.logger.experiment
-        # step = self.trainer.global_step if self.step is None else self.step
+    def log_images(self, nodes, pred, true, elems_list, mode, log_idx=0):
         for field in range(pred.shape[1]):
-            true_img = plot_field(nodes, elems_list, true[:, field],
-                                  title='true')
-            true_img = to_tensor(true_img)
+            true_img = plot_field(nodes, elems_list, true[:, field], title='true')
+            # true_img = to_tensor(true_img, dtype=paddle.float32)
             min_max = (true[:, field].min().item(), true[:, field].max().item())
-            pred_img = plot_field(nodes, elems_list, pred[:, field],
-                                  title='pred', clim=min_max)
-            pred_img = to_tensor(pred_img)
-            imgs = [pred_img, true_img]
-            if hasattr(self.model, 'sim_info'):
-                sim = self.model.sim_info
-                sim_inds = sim['batch'] == log_idx
-                sim_nodes = sim['nodes'][sim_inds]
-                sim_info = sim['output'][sim_inds]
-                sim_elems = sim['elems'][log_idx]
-
-                mesh_inds = paddle.full_like(sim['batch'], fill_value=-1, dtype=paddle.int64)
-                mesh_inds[sim_inds] = paddle.arange(sim_nodes.shape[0])
-                sim_elems_list = self.model.contiguous_elems_list(sim_elems, mesh_inds)
-
-                sim_img = plot_field(sim_nodes, sim_elems_list, sim_info[:, field],
-                                     title='sim', clim=min_max)
-                sim_img = to_tensor(sim_img)
-                imgs = [sim_img] + imgs
-
-            grid = make_grid(paddle.stack(imgs), padding=0)
-            img_name = f'{mode}_pred_f{field}'
-            # exp.add_image(img_name, grid, global_step=step)
+            pred_img = plot_field(nodes, elems_list, pred[:, field], title='pred', clim=min_max)
+            # pred_img = to_tensor(pred_img, dtype=paddle.float32)
+            os.makedirs("fig", exist_ok=True)
+            img_true_name = f'fig/{mode}_true_f{field}_idx{log_idx}_{epoch}.png'
+            img_pred_name = f'fig/{mode}_pred_f{field}_idx{log_idx}_{epoch}.png'
+            im = Image.fromarray(true_img)
+            im.save(img_true_name)
+            im = Image.fromarray(pred_img)
+            im.save(img_pred_name)
 
     @staticmethod
     def get_cross_prods(meshes, store_elems):
@@ -377,7 +358,7 @@ class PaddleWrapper:
 
 
 if __name__ == '__main__':
-    paddle.set_device("cpu")
+    paddle.set_device("gpu")
     activate_su2_mpi(remove_temp_files=True)
 
     args = parse_args()
