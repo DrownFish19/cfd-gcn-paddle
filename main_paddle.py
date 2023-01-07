@@ -316,6 +316,7 @@ if __name__ == '__main__':
             total_val_loss.append(val_loss)
         mean_val_loss = np.stack(total_val_loss).mean()
         print("val_loss (mean):{}".format(mean_val_loss), flush=True)
+        logger.info("val_loss (mean):{}".format(mean_val_loss))
 
         # for test
         total_test_loss = []
@@ -324,3 +325,11 @@ if __name__ == '__main__':
             total_test_loss.append(test_loss)
         mean_test_loss = np.stack(total_test_loss).mean()
         print("test_loss (mean):{}".format(mean_test_loss), flush=True)
+        logger.info("test_loss (mean):{}".format(mean_test_loss))
+
+        os.makedirs("params", exist_ok=True)
+        paddle.save(trainer.model.state_dict(), "params/model{}.pdparams".format(epoch))
+        paddle.save(trainer.optimizer.state_dict(), "params/adam{}.pdopt".format(epoch))
+
+        # trainer.model.set_state_dict(paddle.load("params/model{}.pdparams".format(epoch)))
+        # trainer.optimizer.set_state_dict(paddle.load("params/adam{}.pdopt".format(epoch)))

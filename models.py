@@ -136,11 +136,11 @@ class CFDGCN(nn.Layer):
         nodes = self.get_nodes()  # [353,2]
         self.write_mesh_file(nodes, self.elems, self.marker_dict, filename=self.mesh_file)
 
-        print("nodes[None, ..., 0]", nodes[None, ..., 0].shape, flush=True)
-        print("nodes[None, ..., 1]", nodes[None, ..., 1].shape, flush=True)
-        print("graph.aoa[..., None]", graph.aoa[..., None].shape, flush=True)
-        print("graph.mach_or_reynolds[..., None]", graph.mach_or_reynolds[..., None].shape,
-              flush=True)
+        # print("nodes[None, ..., 0]", nodes[None, ..., 0].shape, flush=True)
+        # print("nodes[None, ..., 1]", nodes[None, ..., 1].shape, flush=True)
+        # print("graph.aoa[..., None]", graph.aoa[..., None].shape, flush=True)
+        # print("graph.mach_or_reynolds[..., None]", graph.mach_or_reynolds[..., None].shape,
+        #       flush=True)
         batch_y = self.su2(nodes[None, ..., 0], nodes[None, ..., 1],
                            graph.aoa[..., None], graph.mach_or_reynolds[..., None])
         batch_y = self.process_sim(batch_y, False)
