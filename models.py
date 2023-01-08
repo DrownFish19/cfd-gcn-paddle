@@ -9,10 +9,6 @@ from mesh_utils import write_graph_mesh, quad2tri, get_mesh_graph, signed_dist_g
 from su2paddle import SU2Module
 
 
-# import torch_geometric
-# from torch_geometric.nn.conv import GCNConv
-# from torch_geometric.nn.unpool import knn_interpolate
-
 # class GCNConv(nn.Layer):
 #     def __init__(self, input_size, output_size, activation='relu'):
 #         super(GCNConv, self).__init__()
@@ -53,19 +49,23 @@ class MeshGCN(nn.Layer):
         #     self.convs.append(GATConv(channels[i] * 4, channels[i + 1], num_heads=4))
         # self.convs.append(GATConv(channels[num_layers - 1]*4, channels[num_layers], num_heads=1))
 
-    def forward(self, graph, x):
+    def forward(self, graphs):
+        pred_fields = []
+        for graph in graphs:
+            x = graph.node_feat["feature"]
 
-        if self.sdf is None:
-            with paddle.no_grad():
-                self.sdf = signed_dist_graph(x[:, :2], self.fine_marker_dict).unsqueeze(1)
-        x = paddle.concat([x, self.sdf], axis=-1)
+            if self.sdf is None:
+                with paddle.no_grad():
+                    self.sdf = signed_dist_graph(x[:, :2], self.fine_marker_dict).unsqueeze(1)
+            x = paddle.concat([x, self.sdf], axis=-1)
 
-        for i, conv in enumerate(self.convs[:-1]):
-            x = conv(graph, x)
-            x = F.relu(x)
+            for i, conv in enumerate(self.convs[:-1]):
+                x = conv(graph, x)
+                x = F.relu(x)
 
-        x = self.convs[-1](graph, x)
-        return x
+            pred_field = self.convs[-1](graph, x)
+            pred_fields.append(pred_field)
+        return pred_fields
 
 
 class CFDGCN(nn.Layer):
@@ -122,48 +122,62 @@ class CFDGCN(nn.Layer):
 
         self.sim_info = {}  # store output of coarse simulation for logging / debugging
 
-    def forward(self, graph, x):
-        batch_size = graph.aoa.shape[0]
+    def forward(self, graphs):
 
-        if self.sdf is None:
-            with paddle.no_grad():
-                self.sdf = signed_dist_graph(x[:, :2], self.fine_marker_dict).unsqueeze(1)
-        fine_x = paddle.concat([x, self.sdf], axis=1)
+        batch_size = len(graphs)
+        nodes_list = []
+        aoa_list = []
+        mach_or_reynolds_list = []
+        fine_x_list = []
+        for graph in graphs:
+            x = graph.node_feat["feature"]
 
-        for i, conv in enumerate(self.pre_convs):
-            fine_x = F.relu(conv(graph, fine_x))
+            if self.sdf is None:
+                with paddle.no_grad():
+                    self.sdf = signed_dist_graph(x[:, :2], self.fine_marker_dict).unsqueeze(1)
+            fine_x = paddle.concat([x, self.sdf], axis=1)
 
-        nodes = self.get_nodes()  # [353,2]
-        self.write_mesh_file(nodes, self.elems, self.marker_dict, filename=self.mesh_file)
+            for i, conv in enumerate(self.pre_convs):
+                fine_x = F.relu(conv(graph, fine_x))
+            fine_x_list.append(fine_x)
 
-        # print("nodes[None, ..., 0]", nodes[None, ..., 0].shape, flush=True)
-        # print("nodes[None, ..., 1]", nodes[None, ..., 1].shape, flush=True)
-        # print("graph.aoa[..., None]", graph.aoa[..., None].shape, flush=True)
-        # print("graph.mach_or_reynolds[..., None]", graph.mach_or_reynolds[..., None].shape,
-        #       flush=True)
-        batch_y = self.su2(nodes[None, ..., 0], nodes[None, ..., 1],
-                           graph.aoa[..., None], graph.mach_or_reynolds[..., None])
-        batch_y = self.process_sim(batch_y, False)
+            nodes = self.get_nodes()  # [353,2]
+            self.write_mesh_file(nodes, self.elems, self.marker_dict, filename=self.mesh_file)
 
-        coarse_y = paddle.stack([y.flatten() for y in batch_y], axis=1).astype("float32")  # features
-        # print("coarse_y", coarse_y, flush=True)
-        # print("coarse_y.shape", coarse_y.shape, flush=True)
-        # print("nodes[:, :2]", nodes[:, :2], flush=True)
-        # print("x[:, :2]", x[:, :2], flush=True)
+            nodes_list.append(nodes)
+            aoa_list.append(graph.aoa)
+            mach_or_reynolds_list.append(graph.mach_or_reynolds)
 
-        fine_y = self.upsample(features=coarse_y, coarse_nodes=nodes[:, :2], fine_nodes=x[:, :2])
-        fine_y = paddle.concat([fine_y, fine_x], axis=1)
+        # paddle stack for [batch,nodes],[batch,nodes],[batch,1],[batch,1] for su2
+        # su2 can apply each item of one batch with mpi
+        nodes_input = paddle.stack(nodes_list, axis=0)
+        aoa_input = paddle.stack(aoa_list, axis=0)
+        mach_or_reynolds_input = paddle.stack(mach_or_reynolds_list, axis=0)
 
-        for i, conv in enumerate(self.convs[:-1]):
-            fine_y = F.relu(conv(graph, fine_y))
-        fine_y = self.convs[-1](graph, fine_y)
+        batch_y = self.su2(nodes_input[..., 0], nodes_input[..., 1],
+                           aoa_input[..., None], mach_or_reynolds_input[..., None])
+        batch_y = self.process_sim(batch_y, False)  # [8,353] * 3, a list with three items
 
-        self.sim_info['nodes'] = nodes[:, :2]
-        self.sim_info['elems'] = [self.elems] * batch_size
-        self.sim_info['batch'] = graph
-        self.sim_info['output'] = coarse_y
+        pred_fields = []
+        for idx in range(batch_size):
+            graph = graphs[idx]
+            coarse_y = paddle.stack([y[idx].flatten() for y in batch_y], axis=1).astype("float32")  # features [353,3]
+            nodes = self.get_nodes()  # [353,2]
+            x = graph.node_feat["feature"]  # [6684,5] the two-first columns are the node locations
+            fine_y = self.upsample(features=coarse_y, coarse_nodes=nodes[:, :2], fine_nodes=x[:, :2])
+            fine_y = paddle.concat([fine_y, fine_x_list[idx]], axis=1)
 
-        return fine_y
+            for i, conv in enumerate(self.convs[:-1]):
+                fine_y = F.relu(conv(graph, fine_y))
+            fine_y = self.convs[-1](graph, fine_y)
+            pred_fields.append(fine_y)
+
+        # self.sim_info['nodes'] = nodes[:, :2]
+        # self.sim_info['elems'] = [self.elems] * batch_size
+        # self.sim_info['batch'] = graph
+        # self.sim_info['output'] = coarse_y
+
+        return pred_fields
 
     def upsample(self, features, coarse_nodes, fine_nodes):
         """

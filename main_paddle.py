@@ -83,7 +83,7 @@ def parse_args():
     parser.add_argument('--debug', action='store_true',
                         help='Run in debug mode. Doesnt write logs. Runs '
                              'a single iteration of training and validation.')
-    parser.add_argument('--no-log', action='store_true',
+    parser.add_argument('--no-log', action='store_true', default=True,
                         help='Dont save any logs or checkpoints.')
 
     args = parser.parse_args()
@@ -185,12 +185,9 @@ class PaddleWrapper:
 
     def common_step(self, graphs):
         loss = 0.0
-        pred_fields = []
-        for graph in graphs:
-            true_field = graph.y
-            pred_field = self.model(graph, paddle.to_tensor(graph.node_feat["feature"]))
-            pred_fields.append(pred_field)
-
+        pred_fields = self.model(graphs)
+        for idx, pred_field in enumerate(pred_fields):
+            true_field = graphs[idx].y
             mse_loss = self.criterion(pred_field, true_field)
             loss += mse_loss
 
@@ -201,15 +198,13 @@ class PaddleWrapper:
 
     def training_step(self, batch, batch_idx):
         loss, pred = self.common_step(batch)
-
-        if batch_idx == 0:
-            # log images when doing val check
-            self.log_images(batch[0].node_feat["feature"][:, :2], pred[0], batch[0].y, self.data.elems_list, 'train')
-
         self.sum_loss += loss.item()
 
-        print("batch_train_loss:{}".format(loss.item()), flush=True)
+        # print("batch_train_loss:{}".format(loss.item()), flush=True)
         logger.info("batch_train_loss:{}".format(loss.item()))
+
+        if batch_idx == 0 and not self.hparams.no_log:
+            self.log_images(batch[0].node_feat["feature"][:, :2], pred[0], batch[0].y, self.data.elems_list, 'train')
 
         loss.backward()
         self.optimizer.step()
@@ -218,22 +213,22 @@ class PaddleWrapper:
     def validation_step(self, batch, batch_idx):
         loss, pred = self.common_step(batch)
 
-        if batch_idx == 0:
+        if batch_idx == 0 and not self.hparams.no_log:
             self.log_images(batch[0].node_feat["feature"][:, :2], pred[0], batch[0].y, self.data.elems_list, 'val')
 
-        print("batch_val_loss:{}".format(loss.item()), flush=True)
+        # print("batch_val_loss:{}".format(loss.item()), flush=True)
 
         return loss.item()
 
     def test_step(self, batch, batch_idx):
         loss, pred = self.common_step(batch)
-
-        # batch_size = batch.batch.max()
         self.step = 0 if self.step is None else self.step
-        for i in range(len(pred)):
-            self.log_images(batch[i].node_feat["feature"][:, :2], pred[i], batch[i].y, self.data.elems_list, 'test',
-                            i)
         self.step += 1
+
+        if not self.hparams.no_log:
+            for i in range(len(pred)):
+                self.log_images(batch[i].node_feat["feature"][:, :2], pred[i], batch[i].y, self.data.elems_list, 'test',
+                                i, batch_idx)
 
         return loss.item()
 
@@ -268,7 +263,7 @@ class PaddleWrapper:
             print(f'Test data: {len(self.test_data)} examples, 'f'{len(test_loader)} batches.', flush=True)
         return test_loader
 
-    def log_images(self, nodes, pred, true, elems_list, mode, log_idx=0):
+    def log_images(self, nodes, pred, true, elems_list, mode, log_idx=0, epoch_idx=0):
         for field in range(pred.shape[1]):
             true_img = plot_field(nodes, elems_list, true[:, field], title='true')
             # true_img = to_tensor(true_img, dtype=paddle.float32)
@@ -276,8 +271,8 @@ class PaddleWrapper:
             pred_img = plot_field(nodes, elems_list, pred[:, field], title='pred', clim=min_max)
             # pred_img = to_tensor(pred_img, dtype=paddle.float32)
             os.makedirs("fig", exist_ok=True)
-            img_true_name = f'fig/{mode}_true_f{field}_idx{log_idx}_{epoch}.png'
-            img_pred_name = f'fig/{mode}_pred_f{field}_idx{log_idx}_{epoch}.png'
+            img_true_name = f'{self.hparams.model}/{mode}_true_f{field}_idx{log_idx}_{epoch_idx}.png'
+            img_pred_name = f'{self.hparams.model}/{mode}_pred_f{field}_idx{log_idx}_{epoch_idx}.png'
             im = Image.fromarray(true_img)
             im.save(img_true_name)
             im = Image.fromarray(pred_img)
@@ -300,7 +295,25 @@ if __name__ == '__main__':
 
     trainer = PaddleWrapper(args)
 
+    # test for special epoch
+    # epoch = 15
+    # trainer.model.set_state_dict(paddle.load("{}/model{}.pdparams".format(trainer.hparams.model, epoch)))
+    # trainer.optimizer.set_state_dict(paddle.load("{}/adam{}.pdopt".format(trainer.hparams.model, epoch)))
+    # total_test_loss = []
+    # for i, x in enumerate(trainer.test_loader):
+    #     test_loss = trainer.test_step(x, i)
+    #     total_test_loss.append(test_loss)
+    # mean_test_loss = np.stack(total_test_loss).mean()
+    # print("test_loss (mean):{}".format(mean_test_loss), flush=True)
+    # logger.info("test_loss (mean):{}".format(mean_test_loss))
+
+    # load model from special epoch
+    # trainer.model.set_state_dict(paddle.load("{}/model{}.pdparams".format(trainer.hparams.model, epoch)))
+    # trainer.optimizer.set_state_dict(paddle.load("{}/adam{}.pdopt".format(trainer.hparams.model, epoch)))
+
     for epoch in range(args.max_epochs):
+        print("epoch:", epoch, flush=True)
+        logger.info("epoch:{}".format(epoch))
         trainer.on_epoch_start()
 
         # for train
@@ -328,8 +341,7 @@ if __name__ == '__main__':
         logger.info("test_loss (mean):{}".format(mean_test_loss))
 
         os.makedirs("params", exist_ok=True)
-        paddle.save(trainer.model.state_dict(), "params/model{}.pdparams".format(epoch))
-        paddle.save(trainer.optimizer.state_dict(), "params/adam{}.pdopt".format(epoch))
+        paddle.save(trainer.model.state_dict(), "{}/model{}.pdparams".format(trainer.hparams.model, epoch))
+        paddle.save(trainer.optimizer.state_dict(), "{}/adam{}.pdopt".format(trainer.hparams.model, epoch))
 
-        # trainer.model.set_state_dict(paddle.load("params/model{}.pdparams".format(epoch)))
-        # trainer.optimizer.set_state_dict(paddle.load("params/adam{}.pdopt".format(epoch)))
+
