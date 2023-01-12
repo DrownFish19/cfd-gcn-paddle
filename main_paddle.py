@@ -22,7 +22,7 @@ from models import CFDGCN, MeshGCN, UCM, CFD
 
 from su2paddle import activate_su2_mpi
 
-logging.basicConfig(level=logging.DEBUG,
+logging.basicConfig(level=logging.INFO,
                     filename='output.log',
                     datefmt='%Y/%m/%d %H:%M:%S',
                     format='%(asctime)s - %(name)s - %(levelname)s - %(lineno)d - %(module)s - %(message)s')
@@ -83,7 +83,7 @@ def parse_args():
     parser.add_argument('--debug', action='store_true',
                         help='Run in debug mode. Doesnt write logs. Runs '
                              'a single iteration of training and validation.')
-    parser.add_argument('--no-log', action='store_true', default=True,
+    parser.add_argument('--no-log', action='store_true', default=False,
                         help='Dont save any logs or checkpoints.')
 
     args = parser.parse_args()
@@ -270,9 +270,9 @@ class PaddleWrapper:
             min_max = (true[:, field].min().item(), true[:, field].max().item())
             pred_img = plot_field(nodes, elems_list, pred[:, field], title='pred', clim=min_max)
             # pred_img = to_tensor(pred_img, dtype=paddle.float32)
-            os.makedirs("fig", exist_ok=True)
-            img_true_name = f'{self.hparams.model}/{mode}_true_f{field}_idx{log_idx}_{epoch_idx}.png'
-            img_pred_name = f'{self.hparams.model}/{mode}_pred_f{field}_idx{log_idx}_{epoch_idx}.png'
+            os.makedirs(f'{self.hparams.model}-fig', exist_ok=True)
+            img_true_name = f'{self.hparams.model}-fig/{mode}_true_f{field}_idx{log_idx}_{epoch_idx}.png'
+            img_pred_name = f'{self.hparams.model}-fig/{mode}_pred_f{field}_idx{log_idx}_{epoch_idx}.png'
             im = Image.fromarray(true_img)
             im.save(img_true_name)
             im = Image.fromarray(pred_img)
@@ -296,7 +296,7 @@ if __name__ == '__main__':
     trainer = PaddleWrapper(args)
 
     # test for special epoch
-    # epoch = 15
+    # epoch = 4
     # trainer.model.set_state_dict(paddle.load("{}/model{}.pdparams".format(trainer.hparams.model, epoch)))
     # trainer.optimizer.set_state_dict(paddle.load("{}/adam{}.pdopt".format(trainer.hparams.model, epoch)))
     # total_test_loss = []
@@ -308,6 +308,7 @@ if __name__ == '__main__':
     # logger.info("test_loss (mean):{}".format(mean_test_loss))
 
     # load model from special epoch
+    # epoch = 254
     # trainer.model.set_state_dict(paddle.load("{}/model{}.pdparams".format(trainer.hparams.model, epoch)))
     # trainer.optimizer.set_state_dict(paddle.load("{}/adam{}.pdopt".format(trainer.hparams.model, epoch)))
 
@@ -340,8 +341,8 @@ if __name__ == '__main__':
         print("test_loss (mean):{}".format(mean_test_loss), flush=True)
         logger.info("test_loss (mean):{}".format(mean_test_loss))
 
-        os.makedirs("params", exist_ok=True)
-        paddle.save(trainer.model.state_dict(), "{}/model{}.pdparams".format(trainer.hparams.model, epoch))
-        paddle.save(trainer.optimizer.state_dict(), "{}/adam{}.pdopt".format(trainer.hparams.model, epoch))
+        os.makedirs("params_{}".format(trainer.hparams.model), exist_ok=True)
+        paddle.save(trainer.model.state_dict(), "params_{}/model{}.pdparams".format(trainer.hparams.model, epoch))
+        paddle.save(trainer.optimizer.state_dict(), "params_{}/adam{}.pdopt".format(trainer.hparams.model, epoch))
 
 
